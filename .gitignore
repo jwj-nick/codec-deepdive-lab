@@ -1,0 +1,7 @@
+# 로컬 설정
+.claude/settings.local.json
+# OS
+.DS_Store
+Thumbs.db
+# 대용량/저작권 자료는 앱에 두지 않음 (공식 링크로 연결)
+*.pdf

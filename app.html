@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deep-Dive — Codec Deep-Dive Lab</title>
+<link rel="stylesheet" href="core/styles.css">
+<!-- CDN: 빌드 없음 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
+</head>
+<body class="app">
+<header class="appbar">
+  <a class="home" href="index.html">◂ Lab</a>
+  <div id="stagemap-mini"></div>
+</header>
+
+<main id="root" class="wrap">
+  <p class="loading">불러오는 중…</p>
+</main>
+
+<footer class="foot wrap">
+  <p>실측만 · 디코더 한정. 코드 인용 = AVM(BSD). spec § = AOMedia AV2 v1.0.0.</p>
+</footer>
+
+<!-- core 컴포넌트 -->
+<script src="core/stagemap.js"></script>
+<script src="core/bitfield.js"></script>
+<script src="core/codeblock.js"></script>
+<script src="core/sidebyside.js"></script>
+<script src="core/render.js"></script>
+<script>
+  (function () {
+    const id = new URLSearchParams(location.search).get('tool') || 'ent';
+    if (!StageMap.has(id)) {
+      document.getElementById('root').innerHTML =
+        '<div class="card"><h2>알 수 없는 tool: ' + id + '</h2><p><a href="index.html">← 돌아가기</a></p></div>';
+      return;
+    }
+    // tool 데이터 스크립트 동적 로드 → window.TOOL → 렌더
+    const s = document.createElement('script');
+    s.src = 'tools/' + id + '.js';
+    s.onload = function () { Render.page(window.TOOL); };
+    s.onerror = function () {
+      document.getElementById('root').innerHTML =
+        '<div class="card"><h2>' + StageMap.label(id) + ' — 준비 중</h2>' +
+        '<p>이 tool의 심화 데이터(<code>tools/' + id + '.js</code>)는 아직 작성 전입니다.</p>' +
+        '<p><a href="index.html">← Lab으로</a></p></div>';
+    };
+    document.body.appendChild(s);
+  })();
+</script>
+</body>
+</html>
