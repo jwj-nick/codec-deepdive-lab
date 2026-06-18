@@ -5,15 +5,15 @@ window.StageMap = (function () {
   const STAGES = [
     { id: 'ent',   hw: 'ENT',     label: 'Entropy Decoder',   short: 'Entropy',   ready: true,
       role: '비트스트림 심볼 복호 — 유일한 순차 병목' },
-    { id: 'mip',   hw: 'MIP',     label: 'Partition & Mode',  short: 'Partition', ready: false,
+    { id: 'mip',   hw: 'MIP',     label: 'Partition & Mode',  short: 'Partition', ready: true,
       role: '분할 트리(SDP)·모드/MV 재구성 — 이웃 의존' },
     { id: 'iqt',   hw: 'IQT',     label: 'Transform & Quant', short: 'Tx/Quant',  ready: true,
       role: '역양자화 + 역변환 — 규칙적 datapath' },
-    { id: 'intra', hw: 'PRD',     label: 'Intra Prediction',  short: 'Intra',     ready: false,
+    { id: 'intra', hw: 'PRD',     label: 'Intra Prediction',  short: 'Intra',     ready: true,
       role: '인트라 예측 — recon 피드백 의존' },
-    { id: 'inter', hw: 'PRD·MEM', label: 'Inter Prediction',  short: 'Inter',     ready: false,
+    { id: 'inter', hw: 'PRD·MEM', label: 'Inter Prediction',  short: 'Inter',     ready: true,
       role: '모션보상 — DRAM 대역폭 지배' },
-    { id: 'lpf',   hw: 'LPF',     label: 'In-loop Filters',   short: 'In-loop',   ready: false,
+    { id: 'lpf',   hw: 'LPF',     label: 'In-loop Filters',   short: 'In-loop',   ready: true,
       role: 'deblock→CDEF→CCSO→LR→GDF — 멀티패스 라인버퍼' },
   ];
   const byId = Object.fromEntries(STAGES.map(s => [s.id, s]));
