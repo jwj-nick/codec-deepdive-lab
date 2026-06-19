@@ -228,4 +228,99 @@ window.TOOL = {
       options: ['256×256 SB', 'CDF에 [TCQ_CTXS] 차원 추가', '비트심도 12bit', '타일 수 증가'],
       answer: 1, why: '`coeff_base_cdf[…][TCQ_CTXS]` — TCQ 상태로 CDF를 고르므로 컨텍스트가 ~2배.' },
   ],
+
+  // ── Mega-deep 함수챕터 (E1~E11) — 함수레벨 줄단위 + HW(Nick 도출) ──
+  chapters: [
+    { id: 'e1', n: 1, title: 'Range decoder 엔진 init', fn: { name: 'avm_od_ec_dec_init' }, ready: false },
+    {
+      id: 'e2', n: 2, title: '다중심볼 복호 코어', ready: true,
+      fn: { name: 'avm_od_ec_decode_cdf_q15_c', file: 'avm_dsp/entdec.c', line: 192,
+        role: '하나의 다중심볼을 산술 복호 — **엔트로피 디코더의 가장 안쪽 루프**(모든 syntax element이 결국 여기로).',
+        callers: 'avm_read_symbol → avm_read_cdf_ (bitreader.h)', callees: 'od_ec_prob_scale · od_ec_dec_normalize' },
+      spec: { num: '8.2.6', title: 'Symbol decoding process',
+        pseudo: '입력 = 역CDF 배열 `icdf`(저장값 = `CDF_PROB_TOP - 누적확률`). 코드 윈도우 상위 16b를 `c`로 두고, ' +
+          '심볼 경계 `v`를 range로 스케일하며 **`c`가 어느 구간에 드는지 선형 탐색** → 그 인덱스가 복호 심볼. 이후 범위 축소+정규화.\n\n' +
+          '> AV1과 **byte-identical** 알고리즘. (엔진 재사용 = ENT HW의 핵심 레버리지.)' },
+      walkthrough: [
+        { code: 'int avm_od_ec_decode_cdf_q15_c(od_ec_dec *dec,\n                  const uint16_t *icdf, int nsyms) {', line: 192,
+          note: '`icdf` = **역(inverse) CDF**. 저장값이 `TOP-누적`이라 "큰 값=낮은 심볼". `nsyms` = 알파벳 크기(≤16).' },
+        { code: 'dif = dec->dif;\nr   = dec->rng;', line: 201,
+          note: '디코더 상태 로드. `dif` = 64-bit **코드 윈도우**, `r` = 현재 **범위**(16-bit, 항상 ≥32768 유지).' },
+        { code: 'c = (unsigned)(dif >> (OD_EC_WINDOW_SIZE - 16));', line: 208,
+          note: '윈도우 **상위 16b**를 비교값 `c`로. (`OD_EC_WINDOW_SIZE=64` → `>>48`.) "지금 범위 어디에 있나".' },
+        { code: 'v = r;\nret = -1;', line: 209,
+          note: '`v`=전체 범위에서 시작, `ret`=심볼 인덱스 카운터(-1에서 증가).' },
+        { code: 'do {\n  u = v;\n  ret++;\n  v = od_ec_prob_scale(icdf[ret], r, ret, nsyms);\n} while (c < v);', line: 211,
+          note: '⭐ **역CDF 선형 탐색.** 심볼 경계 `v`를 range로 스케일하며 내려가다 `c >= v`가 되면 멈춤. 종료 시 `ret`=복호 심볼, `[v,u)`=그 심볼 구간. **반복수 가변(최대 nsyms).**' },
+        { code: 'r = u - v;', line: 218,
+          note: '새 범위 = 복호 심볼 구간의 폭. (산술부호의 "구간 좁히기".)' },
+        { code: 'dif -= (od_ec_window)v << (OD_EC_WINDOW_SIZE - 16);', line: 219,
+          note: '윈도우에서 구간 하한 `v`를 빼 **하한을 0으로 재정렬**.' },
+        { code: 'return od_ec_dec_normalize(dec, dif, r, ret);', line: 220,
+          note: '정규화(범위를 ≥32768로 되돌리며 윈도우 시프트·리필) 후 **심볼 반환**.' },
+        { code: '// 헬퍼: prob.h:238\nint rr = r >> 8;\nint pp = (p >> EC_PROB_SHIFT) << 4;\npp += av2_prob_inc_tbl[nsym-2][n];   // ⭐ AV2 학습 PARA 증분\nreturn ((rr*pp >> (7-EC_PROB_SHIFT-CDF_SHIFT+1+6)) << 3);', line: 240,
+          note: '`od_ec_prob_scale`: icdf 확률을 range로 스케일. **곱셈 `rr*pp`가 루프 내부 critical path.** `av2_prob_inc_tbl`(15×16) = 학습된 per-(알파벳,위치) 미세증분 — AV2 nuance(엔진은 같지만 확률 적응 디테일).' },
+        { code: '// 헬퍼: entdec.h:140 (normalize)\nint d = 16 - OD_ILOG_NZ(rng);   // leading-zero → 시프트량\ndec->cnt -= d;\ndec->dif = ((dif + 1) << d) - 1;\ndec->rng = rng << d;\nif (dec->cnt < OD_EC_MIN_BITS) od_ec_dec_refill(dec);', line: 140,
+          note: '`od_ec_dec_normalize`: `rng`의 leading-zero 수 `d`만큼 좌시프트해 범위 복원, 윈도우도 `d`비트 소비, `cnt`<임계면 윈도우 **리필**(비트스트림 read).' },
+      ],
+      structs: [
+        { name: 'od_ec_dec', file: 'avm_dsp/entdec.h', line: 36,
+          fields: [
+            { f: 'od_ec_window dif (uint64)', d: '코드 윈도우. 상위 16b가 비교값 c' },
+            { f: 'uint16_t rng', d: '현재 범위(≥32768 유지)' },
+            { f: 'int16_t cnt', d: '윈도우 유효 비트 카운트(<임계 시 리필)' },
+            { f: 'bptr / end', d: '비트스트림 포인터' },
+          ],
+          note: 'AV1 `aom_dsp/entdec.h`와 동일 레이아웃. **이 3개 상태(dif/rng/cnt)의 read-modify-write가 심볼 간 직렬 의존의 핵심.**' },
+        { name: '상수', file: 'avm_dsp/prob.h · entcode.h', line: 0,
+          fields: [
+            { f: 'OD_EC_WINDOW_SIZE = 64', d: 'od_ec_window=uint64' },
+            { f: 'CDF_PROB_TOP = 32768 (2^15)', d: 'icdf 정규화 상한' },
+            { f: 'EC_PROB_SHIFT = 7', d: '확률 스케일 시프트' },
+            { f: 'av2_prob_inc_tbl[15][16]', d: '학습 PARA 증분(entcode.h:37)' },
+          ] },
+      ],
+      hw: {
+        datapath: 'graph LR\n' +
+          '  WIN["dif 윈도우(64b)"] --> TOP["상위16b → c"]\n' +
+          '  ICDF["icdf[ret]<br/>(CDF SRAM)"] --> PS["prob_scale<br/>곱 rr*pp + 시프트"]\n' +
+          '  PARA["prob_inc_tbl<br/>(ROM)"] --> PS\n' +
+          '  TOP --> CMP{"c < v ?"}\n' +
+          '  PS --> CMP\n' +
+          '  CMP -->|yes, ret++| ICDF\n' +
+          '  CMP -->|no| RNG["r = u-v"]\n' +
+          '  RNG --> NRM["normalize<br/>LZ count + 시프트 + refill"]\n' +
+          '  NRM --> WIN',
+        questions: [
+          'do-while는 **가변 반복**(최대 nsyms≤16). 16-way 병렬 비교로 1-cycle 고정 vs 순차 반복 — 면적 vs 주파수 트레이드?',
+          '`od_ec_prob_scale`의 곱셈(`rr*pp`)이 루프 내부에 있음. 매 반복 곱 vs 모든 경계 사전계산? 파이프라인 가능 지점은?',
+          '`av2_prob_inc_tbl`(per 반복 조회) + `icdf`(CDF SRAM) — 한 반복에 필요한 ROM/SRAM **read 포트 수**는? 16-way면?',
+          'normalize의 leading-zero count + 가변 시프트 + 조건부 refill — 별도 파이프 스테이지로? refill(비트스트림 read)의 가변 지연을 어떻게 가리나?',
+          '이 함수 = **심볼 1개/호출**. throughput 상한(심볼/cycle)을 결정하는 직렬 합은? (경계탐색 반복 + 곱셈 + normalize)',
+          '다음 호출이 갱신된 `dec->{dif,rng,cnt}`에 의존 → 호출 간 직렬. 파이프라이닝으로 이 의존을 가릴 수 있나, 아니면 본질적 병목인가?',
+        ],
+        derived: null,
+      },
+      checks: [
+        { q: '`icdf`가 "inverse" CDF인 이유와, 그게 비교 `c<v`를 왜 자연스럽게 만드나?',
+          a: '저장값 = `CDF_PROB_TOP - 누적확률`이라 심볼이 커질수록 값이 작아짐. `v`를 큰 경계→작은 경계로 내려가며 `c<v`인 동안 반복 → `c>=v`에서 멈춘 `ret`이 c가 속한 구간.',
+          hint: '저장값과 누적확률의 관계.' },
+        { q: '이 함수는 심볼 몇 개를 디코드하나? 루프의 정체는?',
+          a: '**1개.** 루프는 그 1심볼의 구간을 역CDF에서 선형 탐색하는 것(심볼 여러 개가 아님).',
+          hint: 'ret의 의미.' },
+        { q: '엔진이 AV1과 같은데 AV2가 손댄 디테일 하나는?',
+          a: '`od_ec_prob_scale`의 `av2_prob_inc_tbl[nsym-2][n]` — 학습된 per-(알파벳,위치) 확률 미세증분. 코어 알고리즘은 동일.',
+          hint: 'prob_scale 안의 테이블.' },
+      ],
+    },
+    { id: 'e3', n: 3, title: '정규화·비트회계', fn: { name: 'od_ec_dec_normalize' }, ready: false },
+    { id: 'e4', n: 4, title: '심볼 read·CDF 업데이트', fn: { name: 'avm_read_symbol / update_cdf' }, ready: false },
+    { id: 'e5', n: 5, title: 'CDF 선택·컨텍스트 유도', fn: { name: 'cdf selection (§8.3.2)' }, ready: false },
+    { id: 'e6', n: 6, title: '계수블록 진입', fn: { name: 'av2_read_coeffs_txb_facade' }, ready: false },
+    { id: 'e7', n: 7, title: 'EOB 디코드', fn: { name: 'decode_eob' }, ready: false },
+    { id: 'e8', n: 8, title: 'base+low-range 역스캔', fn: { name: 'read_coeffs_reverse_2d' }, ready: false },
+    { id: 'e9', n: 9, title: '⭐ TCQ 상태기계', fn: { name: 'tcq_next_state' }, ready: false },
+    { id: 'e10', n: 10, title: 'high-range Rice/Golomb', fn: { name: 'read_adaptive_hr' }, ready: false },
+    { id: 'e11', n: 11, title: 'HW 종합 (ENT 스테이지)', fn: { name: '(전체)' }, ready: false },
+  ],
 };

@@ -187,3 +187,48 @@ th{background:var(--panel2);color:var(--mut);font-weight:600}
   .sbs-row{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;align-items:start}
   .sbs-row .sbs-meta{grid-column:1/3}
 }
+
+/* ── 심화 챕터 (mega-deep) ── */
+.muted{color:var(--mut);font-size:.86rem}
+.ch-list{display:grid;gap:6px;margin-top:8px}
+.ch-item{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);
+  border-radius:9px;padding:10px 12px;color:var(--fg)}
+.ch-item:hover{border-color:var(--acc);text-decoration:none;transform:translateX(2px);transition:.12s}
+.ch-item.soon{opacity:.5}
+.ch-item.soon:hover{border-color:var(--line);transform:none}
+.ch-n{flex:0 0 auto;width:1.8em;height:1.8em;display:grid;place-items:center;border-radius:6px;
+  background:var(--panel2);font:600 .8rem var(--mono);color:var(--acc2)}
+.ch-t{flex:1;font-weight:600;font-size:.95rem}
+.ch-t .ch-fn{font:.78rem var(--mono);color:var(--mut);font-weight:400}
+.ch-st{flex:0 0 auto;font-size:.78rem;color:var(--acc)}
+.ch-item.soon .ch-st{color:var(--dim)}
+
+/* 챕터 뷰 */
+.bc{font-size:.82rem;margin:0 0 .3em}
+.ch-hero{padding:14px 0 8px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.ch-hero h1{font-size:1.45rem;margin:.1em 0}
+.ch-fnbar{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin:.3em 0}
+.ch-fnbar code{color:var(--acc2);font-weight:700}
+.chnav{display:flex;gap:8px;flex-wrap:wrap;margin:.6em 0}
+.chnav-b{flex:1 1 0;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:7px 10px;font-size:.8rem;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chnav-b:hover{border-color:var(--acc);text-decoration:none}
+.chnav-b.dis{opacity:.4;pointer-events:none}
+.ch-foot{margin-top:20px;padding-top:14px;border-top:1px solid var(--line)}
+
+/* 워크스루 컴포넌트 */
+.walkthrough{display:grid;gap:10px}
+.wt-step{background:var(--panel);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.wt-code{position:relative;border-bottom:1px solid var(--line)}
+.wt-ln{position:absolute;top:6px;right:8px;z-index:1;font:.66rem var(--mono);color:var(--dim);
+  background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.wt-code pre{margin:0;padding:10px 12px;overflow:auto;background:#0b0f14}
+.wt-code pre code{font-size:.82rem;line-height:1.5;background:none}
+.wt-note{padding:9px 12px;font-size:.9rem;color:var(--fg)}
+.wt-note code{color:var(--acc2)}
+
+/* HW scaffold (Nick 도출) */
+.hw-openq ol{margin:0;padding-left:1.3em;font-size:.92rem}
+.hw-openq ol li{margin:.4em 0;color:var(--fg)}
+.hw-derived{margin-top:14px;background:#10171a;border:1px solid #25403a;border-radius:8px;padding:10px 14px}
+.hw-derived h3{margin:.1em 0 .4em;color:var(--good);font-size:.96rem}

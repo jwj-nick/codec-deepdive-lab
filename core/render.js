@@ -15,12 +15,119 @@ window.Render = (function () {
 
     const root = document.getElementById('root');
     root.innerHTML =
-      header(T) + secSpec(T) + secCode(T) + secBridge(T) + secHW(T) + secChecks(T) + tocNav(T);
+      header(T) + secSpec(T) + secCode(T) + secBridge(T) + secHW(T) + secChapters(T) + secChecks(T) + tocNav(T);
+    postRender();
+  }
 
-    // 포스트 렌더: 코드 하이라이트 + mermaid + 체크포인트 토글 + bitfield 호버
+  // ── 챕터 뷰 (mega-deep 함수레벨 → HW) ──────────────────────
+  function chapter(T, chId) {
+    if (!T) return;
+    const mini = document.getElementById('stagemap-mini');
+    if (mini) mini.innerHTML = StageMap.renderMini(T.id, T.coupling || []);
+    const ch = (T.chapters || []).find(c => c.id === chId);
+    const root = document.getElementById('root');
+    if (!ch || !ch.ready) {
+      root.innerHTML = '<div class="card"><p class="bc"><a href="app.html?tool=' + T.id + '">◂ ' + esc(T.title) + ' overview</a></p>' +
+        '<h2>' + (ch ? esc(ch.n + '. ' + ch.title) : '알 수 없는 챕터') + '</h2>' +
+        '<p>이 함수챕터는 아직 작성 전입니다 (코드 워크스루 예정).</p></div>';
+      return;
+    }
+    document.title = ch.title + ' — ' + T.title;
+    root.innerHTML = chHeader(T, ch) + chSpec(ch) + chWalk(ch) + chStructs(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
+    postRender();
+  }
+
+  function postRender() {
     if (window.hljs) document.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch (e) {} });
     renderMermaid();
     wireChecks();
+  }
+
+  // 오버뷰 하단: 심화 챕터 목록
+  function secChapters(T) {
+    if (!T.chapters || !T.chapters.length) return '';
+    const items = T.chapters.map(c => {
+      const cls = 'ch-item' + (c.ready ? '' : ' soon');
+      const inner = '<span class="ch-n">' + esc(c.n) + '</span>' +
+        '<span class="ch-t">' + esc(c.title) + (c.fn ? ' <span class="ch-fn">' + esc(c.fn.name) + '()</span>' : '') + '</span>' +
+        '<span class="ch-st">' + (c.ready ? '워크스루 →' : '예정') + '</span>';
+      return c.ready
+        ? '<a class="' + cls + '" href="app.html?tool=' + T.id + '&ch=' + c.id + '">' + inner + '</a>'
+        : '<div class="' + cls + '">' + inner + '</div>';
+    }).join('');
+    return sectionWrap('chapters', '심화 챕터 (함수레벨 → HW)',
+      '<p class="muted">각 함수를 줄단위로 파고 HW 아키텍처까지. HW 섹션은 <code>codec-study</code> 소크라테스 도출.</p>' +
+      '<div class="ch-list">' + items + '</div>');
+  }
+
+  function chHeader(T, ch) {
+    const f = ch.fn || {};
+    return '<section class="ch-hero">' +
+      '<p class="bc"><a href="app.html?tool=' + T.id + '">◂ ' + esc(T.title) + ' overview</a></p>' +
+      '<h1>' + esc(ch.n + '. ' + ch.title) + '</h1>' +
+      (f.name ? '<div class="ch-fnbar"><code>' + esc(f.name) + '()</code><span class="cb-loc">' + esc((f.file || '') + (f.line ? ':' + f.line : '')) + '</span></div>' : '') +
+      (f.role ? '<p class="th-role">' + inl(f.role) + '</p>' : '') +
+      ((f.callers || f.callees) ? '<p class="muted">' + (f.callers ? '호출자: ' + esc(f.callers) + ' · ' : '') + (f.callees ? '호출: ' + esc(f.callees) : '') + '</p>' : '') +
+      chNavBtns(T, ch) + '</section>';
+  }
+  function chSpec(ch) {
+    if (!ch.spec) return '';
+    return sectionWrap('ch-spec', 'L1 · spec 좌표',
+      '<div class="spec-block"><h3>§' + esc(ch.spec.num) + ' · ' + esc(ch.spec.title || '') + '</h3>' +
+      (ch.spec.pseudo ? md(ch.spec.pseudo) : '') + '</div>');
+  }
+  function chWalk(ch) {
+    if (!ch.walkthrough || !ch.walkthrough.length) return '';
+    const steps = ch.walkthrough.map(w =>
+      '<div class="wt-step">' +
+        '<div class="wt-code">' + (w.line ? '<span class="wt-ln">L' + esc(w.line) + '</span>' : '') +
+          '<pre><code class="language-c">' + esc(w.code) + '</code></pre></div>' +
+        (w.note ? '<div class="wt-note">' + inl(w.note) + '</div>' : '') +
+      '</div>').join('');
+    const src = ch.fn ? '<p class="muted">출처: <code>' + esc(ch.fn.file + (ch.fn.line ? ':' + ch.fn.line : '')) + '</code> · AVM(BSD)</p>' : '';
+    return sectionWrap('ch-walk', 'L2 · 코드 워크스루 (줄단위)', src + '<div class="walkthrough">' + steps + '</div>');
+  }
+  function chStructs(ch) {
+    if (!ch.structs || !ch.structs.length) return '';
+    return sectionWrap('ch-structs', 'L3 · 자료구조 / 상수', ch.structs.map(structBlock).join(''));
+  }
+  function chHW(ch) {
+    const h = ch.hw; if (!h) return '';
+    const guard = '<div class="hw-guard">⚠️ <b>HW = 일반 아키텍처 사고</b>(공개 코드로 도출 가능한 수준). 이 섹션은 <b>Nick 소크라테스 도출 영역</b> — 특정 IP 정량(SRAM bit·cycle·회사 파이프라인)은 private.</div>';
+    const dp = h.datapath ? mermaidBox(h.datapath, 'datapath 골격 (scaffold)') : '';
+    const qs = (h.questions && h.questions.length)
+      ? '<div class="hw-openq"><h3>유도 질문 (Nick 도출)</h3><ol>' + h.questions.map(q => '<li>' + inl(q) + '</li>').join('') + '</ol></div>' : '';
+    const derived = h.derived
+      ? '<div class="hw-derived"><h3>도출 (Nick)</h3>' + md(h.derived) + '</div>'
+      : '<p class="muted">↑ 위 질문들을 <code>codec-study ' + esc(ch.id) + '</code> 세션에서 도출하면 여기에 정형화됩니다.</p>';
+    return sectionWrap('ch-hw', 'L4 · HW 아키텍처 사고', guard + dp + qs + derived);
+  }
+  function chChecks(ch) {
+    if (!ch.checks || !ch.checks.length) return '';
+    const items = ch.checks.map((c, i) =>
+      '<div class="check" data-i="' + i + '"><button class="check-q">Q' + (i + 1) + '. ' + inl(c.q) + '</button>' +
+      '<div class="check-a">' + (c.hint ? '<p class="check-hint">💡 ' + inl(c.hint) + '</p>' : '') +
+      '<p class="check-ans">' + inl(c.a) + '</p></div></div>').join('');
+    return sectionWrap('ch-checks', '체크포인트', '<div class="checks">' + items + '</div>');
+  }
+  function chNavBtns(T, ch) {
+    const list = T.chapters || [];
+    const i = list.findIndex(c => c.id === ch.id);
+    const prev = i > 0 ? list[i - 1] : null, next = i < list.length - 1 ? list[i + 1] : null;
+    const btn = (c, lbl) => !c ? '<span class="chnav-b dis"></span>'
+      : (c.ready ? '<a class="chnav-b" href="app.html?tool=' + T.id + '&ch=' + c.id + '">' + lbl + ' ' + esc(c.n + '. ' + c.title) + '</a>'
+                 : '<span class="chnav-b dis">' + lbl + ' ' + esc(c.n + '. ' + c.title) + ' (예정)</span>');
+    return '<div class="chnav">' + btn(prev, '◂') + btn(next, '▸') + '</div>';
+  }
+  function chNav(T, ch) {
+    return '<div class="ch-foot">' + chNavBtns(T, ch) +
+      '<p><a href="app.html?tool=' + T.id + '">↑ ' + esc(T.title) + ' overview</a></p></div>';
+  }
+  function structBlock(s) {
+    return '<div class="struct"><div class="struct-head"><code>' + esc(s.name) + '</code>' +
+      (s.file ? '<span class="cb-loc">' + esc(s.file + (s.line ? ':' + s.line : '')) + '</span>' : '') + '</div>' +
+      (s.fields && s.fields.length ? '<ul class="struct-fields">' + s.fields.map(fl => '<li><code>' + esc(fl.f) + '</code> — ' + inl(fl.d || '') + '</li>').join('') + '</ul>' : '') +
+      (s.note ? '<p class="cb-note">' + inl(s.note) + '</p>' : '') + '</div>';
   }
 
   function header(T) {
@@ -153,5 +260,5 @@ window.Render = (function () {
       }));
   }
 
-  return { page: page };
+  return { page: page, chapter: chapter };
 })();
