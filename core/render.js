@@ -19,21 +19,21 @@ window.Render = (function () {
     postRender();
   }
 
-  // ── 챕터 뷰 (mega-deep 함수레벨 → HW) ──────────────────────
+  // ── Chapter view (mega-deep, function-level → HW) ──────────
   function chapter(T, chId) {
     if (!T) return;
     const mini = document.getElementById('stagemap-mini');
     if (mini) mini.innerHTML = StageMap.renderMini(T.id, T.coupling || []);
     const ch = (T.chapters || []).find(c => c.id === chId);
     const root = document.getElementById('root');
-    if (!ch || !ch.ready) {
-      root.innerHTML = '<div class="card"><p class="bc"><a href="app.html?tool=' + T.id + '">◂ ' + esc(T.title) + ' overview</a></p>' +
-        '<h2>' + (ch ? esc(ch.n + '. ' + ch.title) : '알 수 없는 챕터') + '</h2>' +
-        '<p>이 함수챕터는 아직 작성 전입니다 (코드 워크스루 예정).</p></div>';
+    if (!ch) {
+      root.innerHTML = '<div class="card"><p class="bc"><a href="app.html?tool=' + T.id + '">◂ ' + esc(T.title) + ' overview</a></p><h2>Unknown chapter</h2></div>';
       return;
     }
     document.title = ch.title + ' — ' + T.title;
-    root.innerHTML = chHeader(T, ch) + chSpec(ch) + chWalk(ch) + chStructs(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
+    const skel = ch.stage !== 'full'
+      ? '<div class="skel-banner">🚧 <b>Skeleton</b> — line-by-line walkthrough pending. Fill while studying via <code>codec-study ' + esc(ch.id) + '</code>.</div>' : '';
+    root.innerHTML = chHeader(T, ch) + skel + chSpec(ch) + chFigures(ch) + chWalk(ch) + chStructs(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
     postRender();
   }
 
@@ -43,38 +43,54 @@ window.Render = (function () {
     wireChecks();
   }
 
-  // 오버뷰 하단: 심화 챕터 목록
+  // Overview footer: deep-dive chapter list
   function secChapters(T) {
     if (!T.chapters || !T.chapters.length) return '';
     const items = T.chapters.map(c => {
-      const cls = 'ch-item' + (c.ready ? '' : ' soon');
+      const st = c.stage === 'full' ? 'walkthrough →' : 'skeleton →';
       const inner = '<span class="ch-n">' + esc(c.n) + '</span>' +
         '<span class="ch-t">' + esc(c.title) + (c.fn ? ' <span class="ch-fn">' + esc(c.fn.name) + '()</span>' : '') + '</span>' +
-        '<span class="ch-st">' + (c.ready ? '워크스루 →' : '예정') + '</span>';
-      return c.ready
-        ? '<a class="' + cls + '" href="app.html?tool=' + T.id + '&ch=' + c.id + '">' + inner + '</a>'
-        : '<div class="' + cls + '">' + inner + '</div>';
+        '<span class="ch-st' + (c.stage === 'full' ? ' full' : '') + '">' + st + '</span>';
+      return '<a class="ch-item" href="app.html?tool=' + T.id + '&ch=' + c.id + '">' + inner + '</a>';
     }).join('');
-    return sectionWrap('chapters', '심화 챕터 (함수레벨 → HW)',
-      '<p class="muted">각 함수를 줄단위로 파고 HW 아키텍처까지. HW 섹션은 <code>codec-study</code> 소크라테스 도출.</p>' +
+    return sectionWrap('chapters', 'Deep-dive chapters (function-level → HW)',
+      '<p class="muted">Each chapter dissects one function line-by-line, then reasons to HW. The HW section is yours to derive via <code>codec-study</code>.</p>' +
       '<div class="ch-list">' + items + '</div>');
+  }
+
+  // Chapter quick-nav strip  [1][2]…[N]
+  function chStrip(T, ch) {
+    return '<nav class="ch-strip">' + (T.chapters || []).map(c =>
+      '<a class="cs' + (c.id === ch.id ? ' on' : '') + (c.stage === 'full' ? ' full' : '') +
+      '" href="app.html?tool=' + T.id + '&ch=' + c.id + '" title="' + esc(c.n + '. ' + c.title) + '">' + esc(c.n) + '</a>').join('') + '</nav>';
   }
 
   function chHeader(T, ch) {
     const f = ch.fn || {};
     return '<section class="ch-hero">' +
       '<p class="bc"><a href="app.html?tool=' + T.id + '">◂ ' + esc(T.title) + ' overview</a></p>' +
+      chStrip(T, ch) +
       '<h1>' + esc(ch.n + '. ' + ch.title) + '</h1>' +
-      (f.name ? '<div class="ch-fnbar"><code>' + esc(f.name) + '()</code><span class="cb-loc">' + esc((f.file || '') + (f.line ? ':' + f.line : '')) + '</span></div>' : '') +
+      (f.name ? '<div class="ch-fnbar"><code>' + esc(f.name) + '()</code>' + (f.file ? '<span class="cb-loc">' + esc(f.file + (f.line ? ':' + f.line : '')) + '</span>' : '') + '</div>' : '') +
       (f.role ? '<p class="th-role">' + inl(f.role) + '</p>' : '') +
-      ((f.callers || f.callees) ? '<p class="muted">' + (f.callers ? '호출자: ' + esc(f.callers) + ' · ' : '') + (f.callees ? '호출: ' + esc(f.callees) : '') + '</p>' : '') +
+      ((f.callers || f.callees) ? '<p class="muted">' + (f.callers ? 'callers: ' + esc(f.callers) + ' · ' : '') + (f.callees ? 'calls: ' + esc(f.callees) : '') + '</p>' : '') +
       chNavBtns(T, ch) + '</section>';
   }
   function chSpec(ch) {
     if (!ch.spec) return '';
-    return sectionWrap('ch-spec', 'L1 · spec 좌표',
+    return sectionWrap('ch-spec', 'L1 · Spec',
       '<div class="spec-block"><h3>§' + esc(ch.spec.num) + ' · ' + esc(ch.spec.title || '') + '</h3>' +
       (ch.spec.pseudo ? md(ch.spec.pseudo) : '') + '</div>');
+  }
+  function chFigures(ch) {
+    if (!ch.figures || !ch.figures.length) return '';
+    const body = ch.figures.map(fg => {
+      if (fg.mermaid) return mermaidBox(fg.mermaid, fg.title || '');
+      if (fg.ascii) return '<figure class="ascii-fig">' + (fg.title ? '<figcaption>' + esc(fg.title) + '</figcaption>' : '') +
+        '<pre class="ascii">' + esc(fg.ascii) + '</pre>' + (fg.caption ? '<p class="muted">' + inl(fg.caption) + '</p>' : '') + '</figure>';
+      return '';
+    }).join('');
+    return sectionWrap('ch-fig', 'Figures · intuition', body);
   }
   function chWalk(ch) {
     if (!ch.walkthrough || !ch.walkthrough.length) return '';
@@ -84,23 +100,23 @@ window.Render = (function () {
           '<pre><code class="language-c">' + esc(w.code) + '</code></pre></div>' +
         (w.note ? '<div class="wt-note">' + inl(w.note) + '</div>' : '') +
       '</div>').join('');
-    const src = ch.fn ? '<p class="muted">출처: <code>' + esc(ch.fn.file + (ch.fn.line ? ':' + ch.fn.line : '')) + '</code> · AVM(BSD)</p>' : '';
-    return sectionWrap('ch-walk', 'L2 · 코드 워크스루 (줄단위)', src + '<div class="walkthrough">' + steps + '</div>');
+    const src = ch.fn ? '<p class="muted">source: <code>' + esc(ch.fn.file + (ch.fn.line ? ':' + ch.fn.line : '')) + '</code> · AVM (BSD)</p>' : '';
+    return sectionWrap('ch-walk', 'L2 · Code walkthrough (line-by-line)', src + '<div class="walkthrough">' + steps + '</div>');
   }
   function chStructs(ch) {
     if (!ch.structs || !ch.structs.length) return '';
-    return sectionWrap('ch-structs', 'L3 · 자료구조 / 상수', ch.structs.map(structBlock).join(''));
+    return sectionWrap('ch-structs', 'L3 · Data structures & constants', ch.structs.map(structBlock).join(''));
   }
   function chHW(ch) {
     const h = ch.hw; if (!h) return '';
-    const guard = '<div class="hw-guard">⚠️ <b>HW = 일반 아키텍처 사고</b>(공개 코드로 도출 가능한 수준). 이 섹션은 <b>Nick 소크라테스 도출 영역</b> — 특정 IP 정량(SRAM bit·cycle·회사 파이프라인)은 private.</div>';
-    const dp = h.datapath ? mermaidBox(h.datapath, 'datapath 골격 (scaffold)') : '';
+    const guard = '<div class="hw-guard">⚠️ <b>HW = general architecture reasoning</b> (derivable from public code). This section is <b>yours to derive</b> (Socratic). IP-specific numbers — SRAM bits, cycle counts, your pipeline — stay private.</div>';
+    const dp = h.datapath ? mermaidBox(h.datapath, 'datapath skeleton') : '';
     const qs = (h.questions && h.questions.length)
-      ? '<div class="hw-openq"><h3>유도 질문 (Nick 도출)</h3><ol>' + h.questions.map(q => '<li>' + inl(q) + '</li>').join('') + '</ol></div>' : '';
+      ? '<div class="hw-openq"><h3>Guiding questions (derive)</h3><ol>' + h.questions.map(q => '<li>' + inl(q) + '</li>').join('') + '</ol></div>' : '';
     const derived = h.derived
-      ? '<div class="hw-derived"><h3>도출 (Nick)</h3>' + md(h.derived) + '</div>'
-      : '<p class="muted">↑ 위 질문들을 <code>codec-study ' + esc(ch.id) + '</code> 세션에서 도출하면 여기에 정형화됩니다.</p>';
-    return sectionWrap('ch-hw', 'L4 · HW 아키텍처 사고', guard + dp + qs + derived);
+      ? '<div class="hw-derived"><h3>Derived</h3>' + md(h.derived) + '</div>'
+      : '<p class="muted">↑ Derive these in a <code>codec-study ' + esc(ch.id) + '</code> session; answers get formalized here.</p>';
+    return sectionWrap('ch-hw', 'L4 · HW architecture', guard + dp + qs + derived);
   }
   function chChecks(ch) {
     if (!ch.checks || !ch.checks.length) return '';
@@ -108,15 +124,14 @@ window.Render = (function () {
       '<div class="check" data-i="' + i + '"><button class="check-q">Q' + (i + 1) + '. ' + inl(c.q) + '</button>' +
       '<div class="check-a">' + (c.hint ? '<p class="check-hint">💡 ' + inl(c.hint) + '</p>' : '') +
       '<p class="check-ans">' + inl(c.a) + '</p></div></div>').join('');
-    return sectionWrap('ch-checks', '체크포인트', '<div class="checks">' + items + '</div>');
+    return sectionWrap('ch-checks', 'Checkpoints', '<div class="checks">' + items + '</div>');
   }
   function chNavBtns(T, ch) {
     const list = T.chapters || [];
     const i = list.findIndex(c => c.id === ch.id);
     const prev = i > 0 ? list[i - 1] : null, next = i < list.length - 1 ? list[i + 1] : null;
     const btn = (c, lbl) => !c ? '<span class="chnav-b dis"></span>'
-      : (c.ready ? '<a class="chnav-b" href="app.html?tool=' + T.id + '&ch=' + c.id + '">' + lbl + ' ' + esc(c.n + '. ' + c.title) + '</a>'
-                 : '<span class="chnav-b dis">' + lbl + ' ' + esc(c.n + '. ' + c.title) + ' (예정)</span>');
+      : '<a class="chnav-b" href="app.html?tool=' + T.id + '&ch=' + c.id + '">' + lbl + ' ' + esc(c.n + '. ' + c.title) + '</a>';
     return '<div class="chnav">' + btn(prev, '◂') + btn(next, '▸') + '</div>';
   }
   function chNav(T, ch) {
@@ -154,7 +169,7 @@ window.Render = (function () {
       '</div>').join('');
     const bf = (sp.bitfields || []).map(b => BitField.render(b)).join('');
     if (!secs && !bf) return '';
-    return sectionWrap('spec', 'L1 · Spec (규범)', secs + bf);
+    return sectionWrap('spec', 'L1 · Spec', secs + bf);
   }
 
   // ── L2 C-Model ─────────────────────────────────────────────
@@ -171,16 +186,16 @@ window.Render = (function () {
     const gdb = (c.gdb && c.gdb.length)
       ? '<div class="gdb"><div class="gdb-lbl">gdb 실측값</div><ul>' +
         c.gdb.map(g => '<li><code>' + esc(g.at) + '</code> → ' + inl(g.val) + '</li>').join('') + '</ul></div>' : '';
-    const body = cg + (funcs ? '<h3>핵심 함수</h3>' + funcs : '') +
-                 (structs ? '<h3>자료구조</h3>' + structs : '') + gdb;
+    const body = cg + (funcs ? '<h3>Key functions</h3>' + funcs : '') +
+                 (structs ? '<h3>Data structures</h3>' + structs : '') + gdb;
     if (!body.trim()) return '';
-    return sectionWrap('code', 'L2 · C-Model (AVM 실측)', body);
+    return sectionWrap('code', 'L2 · C-Model (source)', body);
   }
 
   // ── L3 Bridge ──────────────────────────────────────────────
   function secBridge(T) {
     if (!T.bridge || !T.bridge.length) return '';
-    return sectionWrap('bridge', 'L3 · Spec ↔ Code + AV1→AV2 델타', SideBySide.render(T.bridge));
+    return sectionWrap('bridge', 'L3 · Spec ↔ Code · AV1→AV2 delta', SideBySide.render(T.bridge));
   }
 
   // ── L4 HW ──────────────────────────────────────────────────
@@ -230,7 +245,7 @@ window.Render = (function () {
     return '<section id="sec-' + id + '" class="layer-sec"><h2 class="layer-h">' + esc(title) + '</h2>' + body + '</section>';
   }
   function tocNav(T) {
-    const items = [['spec','L1 Spec'],['code','L2 Code'],['bridge','L3 델타'],['hw','L4 HW'],['checks','확인']];
+    const items = [['spec','L1 Spec'],['code','L2 Code'],['bridge','L3 delta'],['hw','L4 HW'],['checks','Check']];
     return '<nav class="toc"><div class="toc-title">' + esc(T.title) + '</div>' +
       items.map(it => '<a href="#sec-' + it[0] + '">' + it[1] + '</a>').join('') + '</nav>';
   }

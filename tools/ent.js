@@ -231,96 +231,204 @@ window.TOOL = {
 
   // ── Mega-deep 함수챕터 (E1~E11) — 함수레벨 줄단위 + HW(Nick 도출) ──
   chapters: [
-    { id: 'e1', n: 1, title: 'Range decoder 엔진 init', fn: { name: 'avm_od_ec_dec_init' }, ready: false },
+    { id: 'e1', n: 1, title: 'Range decoder init', stage: 'skeleton',
+      fn: { name: 'avm_od_ec_dec_init', file: 'avm_dsp/entdec.c', line: 75,
+        role: 'Initialize the arithmetic decoder: range = 0x8000, cnt = -15, first window refill.' },
+      spec: { num: '8.2.2', title: 'Initialization process for symbol decoder' },
+      hw: { questions: [
+        'How many bytes load into the 64-bit window at reset? Byte-aligned vs bit-level refill datapath?',
+        'rng = 0x8000, cnt = -15 — what invariant do these set up for the first decode (range >= 32768)?',
+        'Refill engine: interaction with the bitstream pointer and tile boundary?',
+      ], derived: null } },
     {
-      id: 'e2', n: 2, title: '다중심볼 복호 코어', ready: true,
+      id: 'e2', n: 2, title: 'Multi-symbol decode core', stage: 'full',
       fn: { name: 'avm_od_ec_decode_cdf_q15_c', file: 'avm_dsp/entdec.c', line: 192,
-        role: '하나의 다중심볼을 산술 복호 — **엔트로피 디코더의 가장 안쪽 루프**(모든 syntax element이 결국 여기로).',
+        role: 'Arithmetic-decode one multi-symbol value — the **innermost loop** of the entropy decoder (every syntax element ends up here).',
         callers: 'avm_read_symbol → avm_read_cdf_ (bitreader.h)', callees: 'od_ec_prob_scale · od_ec_dec_normalize' },
       spec: { num: '8.2.6', title: 'Symbol decoding process',
-        pseudo: '입력 = 역CDF 배열 `icdf`(저장값 = `CDF_PROB_TOP - 누적확률`). 코드 윈도우 상위 16b를 `c`로 두고, ' +
-          '심볼 경계 `v`를 range로 스케일하며 **`c`가 어느 구간에 드는지 선형 탐색** → 그 인덱스가 복호 심볼. 이후 범위 축소+정규화.\n\n' +
-          '> AV1과 **byte-identical** 알고리즘. (엔진 재사용 = ENT HW의 핵심 레버리지.)' },
+        pseudo: 'Input = inverse-CDF array `icdf` (stored = `CDF_PROB_TOP - cumulative` ⇒ larger value = lower symbol). ' +
+          'Take the top 16 bits of the code window as `c`, scale each symbol boundary `v` to the range, and **linearly search which sub-interval `c` falls in** — that index is the decoded symbol. Then narrow the range and renormalize.\n\n' +
+          '> Algorithm is **byte-identical to AV1**. Engine reuse is the key ENT-HW leverage.' },
+      figures: [
+        { title: 'Interval narrowing — the core idea',
+          ascii:
+'  r |--------|------|----------|----|-----------| 0\n' +
+'    symbol 0 |  1   |    2     | 3  |     4\n' +
+'    icdf: v0  v1     v2         v3   v4         v5=0\n' +
+'                      ^ c\n' +
+'    c falls in v3..v2   =>  decoded symbol = 2\n' +
+'    r_new = v2 - v3         (new range = slot width)\n' +
+'    dif  -= v3              (re-base low -> 0)\n' +
+'    normalize: rescale r_new back up to >= 32768',
+          caption: 'Arithmetic decoding = repeatedly zoom into the sub-interval the code points to.' },
+        { title: 'Inverse-CDF linear search (the do-while loop)',
+          mermaid:
+'graph TD\n' +
+'  A["ret = -1, v = r"] --> B["u = v; ret++;<br/>v = scaled icdf boundary"]\n' +
+'  B --> C{"c < v ?"}\n' +
+'  C -->|yes| B\n' +
+'  C -->|no| D["symbol = ret<br/>interval v..u"]' },
+        { title: 'Serial dependency — the ENT throughput wall',
+          mermaid:
+'graph LR\n' +
+'  P["decode symbol n-1"] --> S["dec.dif / rng / cnt<br/>carried state"]\n' +
+'  S --> N["decode symbol n"]\n' +
+'  N --> S2["next state"]\n' +
+'  S2 --> M["decode symbol n+1"]',
+          caption: 'Each call read-modify-writes the same decoder state, so calls cannot overlap — this is why ENT is the throughput bottleneck.' },
+      ],
       walkthrough: [
         { code: 'int avm_od_ec_decode_cdf_q15_c(od_ec_dec *dec,\n                  const uint16_t *icdf, int nsyms) {', line: 192,
-          note: '`icdf` = **역(inverse) CDF**. 저장값이 `TOP-누적`이라 "큰 값=낮은 심볼". `nsyms` = 알파벳 크기(≤16).' },
+          note: '`icdf` = **inverse CDF**. Stored value = `TOP - cumulative`, so "larger value = lower symbol". `nsyms` = alphabet size (≤16).' },
         { code: 'dif = dec->dif;\nr   = dec->rng;', line: 201,
-          note: '디코더 상태 로드. `dif` = 64-bit **코드 윈도우**, `r` = 현재 **범위**(16-bit, 항상 ≥32768 유지).' },
+          note: 'Load decoder state. `dif` = 64-bit **code window**, `r` = current **range** (16-bit, always kept ≥ 32768).' },
         { code: 'c = (unsigned)(dif >> (OD_EC_WINDOW_SIZE - 16));', line: 208,
-          note: '윈도우 **상위 16b**를 비교값 `c`로. (`OD_EC_WINDOW_SIZE=64` → `>>48`.) "지금 범위 어디에 있나".' },
+          note: 'Take the **top 16 bits** of the window as compare value `c` (`OD_EC_WINDOW_SIZE=64` ⇒ `>>48`) — "where in the range are we".' },
         { code: 'v = r;\nret = -1;', line: 209,
-          note: '`v`=전체 범위에서 시작, `ret`=심볼 인덱스 카운터(-1에서 증가).' },
+          note: '`v` starts at the full range; `ret` = symbol index counter (from -1).' },
         { code: 'do {\n  u = v;\n  ret++;\n  v = od_ec_prob_scale(icdf[ret], r, ret, nsyms);\n} while (c < v);', line: 211,
-          note: '⭐ **역CDF 선형 탐색.** 심볼 경계 `v`를 range로 스케일하며 내려가다 `c >= v`가 되면 멈춤. 종료 시 `ret`=복호 심볼, `[v,u)`=그 심볼 구간. **반복수 가변(최대 nsyms).**' },
+          note: '⭐ **Inverse-CDF linear search.** Scale each boundary `v` to the range and walk down until `c >= v`. On exit `ret` = decoded symbol, `[v,u)` = its sub-interval. **Iteration count is data-dependent (≤ nsyms).**' },
         { code: 'r = u - v;', line: 218,
-          note: '새 범위 = 복호 심볼 구간의 폭. (산술부호의 "구간 좁히기".)' },
+          note: 'New range = width of the decoded symbol\'s sub-interval (the "narrowing").' },
         { code: 'dif -= (od_ec_window)v << (OD_EC_WINDOW_SIZE - 16);', line: 219,
-          note: '윈도우에서 구간 하한 `v`를 빼 **하한을 0으로 재정렬**.' },
+          note: 'Subtract the sub-interval low bound `v` from the window — **re-base the low to 0**.' },
         { code: 'return od_ec_dec_normalize(dec, dif, r, ret);', line: 220,
-          note: '정규화(범위를 ≥32768로 되돌리며 윈도우 시프트·리필) 후 **심볼 반환**.' },
-        { code: '// 헬퍼: prob.h:238\nint rr = r >> 8;\nint pp = (p >> EC_PROB_SHIFT) << 4;\npp += av2_prob_inc_tbl[nsym-2][n];   // ⭐ AV2 학습 PARA 증분\nreturn ((rr*pp >> (7-EC_PROB_SHIFT-CDF_SHIFT+1+6)) << 3);', line: 240,
-          note: '`od_ec_prob_scale`: icdf 확률을 range로 스케일. **곱셈 `rr*pp`가 루프 내부 critical path.** `av2_prob_inc_tbl`(15×16) = 학습된 per-(알파벳,위치) 미세증분 — AV2 nuance(엔진은 같지만 확률 적응 디테일).' },
-        { code: '// 헬퍼: entdec.h:140 (normalize)\nint d = 16 - OD_ILOG_NZ(rng);   // leading-zero → 시프트량\ndec->cnt -= d;\ndec->dif = ((dif + 1) << d) - 1;\ndec->rng = rng << d;\nif (dec->cnt < OD_EC_MIN_BITS) od_ec_dec_refill(dec);', line: 140,
-          note: '`od_ec_dec_normalize`: `rng`의 leading-zero 수 `d`만큼 좌시프트해 범위 복원, 윈도우도 `d`비트 소비, `cnt`<임계면 윈도우 **리필**(비트스트림 read).' },
+          note: 'Renormalize (shift range back to ≥ 32768, consume/refill the window) and **return the symbol**.' },
+        { code: '// helper: prob.h:238\nint rr = r >> 8;\nint pp = (p >> EC_PROB_SHIFT) << 4;\npp += av2_prob_inc_tbl[nsym-2][n];   // AV2 trained PARA increment\nreturn ((rr*pp >> (7-EC_PROB_SHIFT-CDF_SHIFT+1+6)) << 3);', line: 240,
+          note: '`od_ec_prob_scale`: scale the icdf prob to the range. The **multiply `rr*pp` is the per-iteration critical path.** `av2_prob_inc_tbl` (15×16) = a **trained** per-(alphabet, position) increment — an AV2 nuance (same engine, refined probability adaptation).' },
+        { code: '// helper: entdec.h:140 (normalize)\nint d = 16 - OD_ILOG_NZ(rng);   // leading-zeros -> shift amount\ndec->cnt -= d;\ndec->dif = ((dif + 1) << d) - 1;\ndec->rng = rng << d;\nif (dec->cnt < OD_EC_MIN_BITS) od_ec_dec_refill(dec);', line: 140,
+          note: '`od_ec_dec_normalize`: left-shift by `d` = leading-zeros of `rng` to restore the range; the window consumes `d` bits; if `cnt` < threshold, **refill** from the bitstream.' },
       ],
       structs: [
         { name: 'od_ec_dec', file: 'avm_dsp/entdec.h', line: 36,
           fields: [
-            { f: 'od_ec_window dif (uint64)', d: '코드 윈도우. 상위 16b가 비교값 c' },
-            { f: 'uint16_t rng', d: '현재 범위(≥32768 유지)' },
-            { f: 'int16_t cnt', d: '윈도우 유효 비트 카운트(<임계 시 리필)' },
-            { f: 'bptr / end', d: '비트스트림 포인터' },
+            { f: 'od_ec_window dif (uint64)', d: 'code window; top 16b is the compare value c' },
+            { f: 'uint16_t rng', d: 'current range (kept ≥ 32768)' },
+            { f: 'int16_t cnt', d: 'valid-bit count in the window (< threshold → refill)' },
+            { f: 'bptr / end', d: 'bitstream pointers' },
           ],
-          note: 'AV1 `aom_dsp/entdec.h`와 동일 레이아웃. **이 3개 상태(dif/rng/cnt)의 read-modify-write가 심볼 간 직렬 의존의 핵심.**' },
-        { name: '상수', file: 'avm_dsp/prob.h · entcode.h', line: 0,
+          note: 'Same layout as AV1 `aom_dsp/entdec.h`. **The read-modify-write of these 3 state words (dif/rng/cnt) is the core of the symbol-to-symbol serial dependency.**' },
+        { name: 'constants', file: 'avm_dsp/prob.h · entcode.h', line: 0,
           fields: [
-            { f: 'OD_EC_WINDOW_SIZE = 64', d: 'od_ec_window=uint64' },
-            { f: 'CDF_PROB_TOP = 32768 (2^15)', d: 'icdf 정규화 상한' },
-            { f: 'EC_PROB_SHIFT = 7', d: '확률 스케일 시프트' },
-            { f: 'av2_prob_inc_tbl[15][16]', d: '학습 PARA 증분(entcode.h:37)' },
+            { f: 'OD_EC_WINDOW_SIZE = 64', d: 'od_ec_window = uint64' },
+            { f: 'CDF_PROB_TOP = 32768 (2^15)', d: 'icdf normalization top' },
+            { f: 'EC_PROB_SHIFT = 7', d: 'probability scaling shift' },
+            { f: 'av2_prob_inc_tbl[15][16]', d: 'trained PARA increment (entcode.h:37)' },
           ] },
       ],
       hw: {
         datapath: 'graph LR\n' +
-          '  WIN["dif 윈도우(64b)"] --> TOP["상위16b → c"]\n' +
-          '  ICDF["icdf[ret]<br/>(CDF SRAM)"] --> PS["prob_scale<br/>곱 rr*pp + 시프트"]\n' +
+          '  WIN["dif window (64b)"] --> TOP["top 16b → c"]\n' +
+          '  ICDF["icdf[ret]<br/>(CDF SRAM)"] --> PS["prob_scale<br/>mul rr*pp + shift"]\n' +
           '  PARA["prob_inc_tbl<br/>(ROM)"] --> PS\n' +
           '  TOP --> CMP{"c < v ?"}\n' +
           '  PS --> CMP\n' +
           '  CMP -->|yes, ret++| ICDF\n' +
           '  CMP -->|no| RNG["r = u-v"]\n' +
-          '  RNG --> NRM["normalize<br/>LZ count + 시프트 + refill"]\n' +
+          '  RNG --> NRM["normalize<br/>LZ-count + shift + refill"]\n' +
           '  NRM --> WIN',
         questions: [
-          'do-while는 **가변 반복**(최대 nsyms≤16). 16-way 병렬 비교로 1-cycle 고정 vs 순차 반복 — 면적 vs 주파수 트레이드?',
-          '`od_ec_prob_scale`의 곱셈(`rr*pp`)이 루프 내부에 있음. 매 반복 곱 vs 모든 경계 사전계산? 파이프라인 가능 지점은?',
-          '`av2_prob_inc_tbl`(per 반복 조회) + `icdf`(CDF SRAM) — 한 반복에 필요한 ROM/SRAM **read 포트 수**는? 16-way면?',
-          'normalize의 leading-zero count + 가변 시프트 + 조건부 refill — 별도 파이프 스테이지로? refill(비트스트림 read)의 가변 지연을 어떻게 가리나?',
-          '이 함수 = **심볼 1개/호출**. throughput 상한(심볼/cycle)을 결정하는 직렬 합은? (경계탐색 반복 + 곱셈 + normalize)',
-          '다음 호출이 갱신된 `dec->{dif,rng,cnt}`에 의존 → 호출 간 직렬. 파이프라이닝으로 이 의존을 가릴 수 있나, 아니면 본질적 병목인가?',
+          'The do-while is a **data-dependent loop** (≤ nsyms = 16). 16-way parallel compare for a fixed 1-cycle vs sequential iteration — area vs frequency trade?',
+          'The multiply `rr*pp` in `od_ec_prob_scale` sits inside the loop. Multiply per iteration vs precompute all boundaries? Where can you pipeline?',
+          '`av2_prob_inc_tbl` (per iteration) + `icdf` (CDF SRAM) — how many ROM/SRAM **read ports** per iteration? And for a 16-way unroll?',
+          'normalize = leading-zero count + variable shift + conditional refill. Separate pipe stage? How do you hide the variable refill (bitstream read) latency?',
+          'This function = **one symbol per call**. What serial sum sets the throughput ceiling (symbols/cycle)? (boundary search + multiply + normalize)',
+          'The next call depends on the updated `dec->{dif,rng,cnt}` → calls are serial. Can pipelining hide this dependency, or is it the fundamental bottleneck?',
         ],
         derived: null,
       },
       checks: [
-        { q: '`icdf`가 "inverse" CDF인 이유와, 그게 비교 `c<v`를 왜 자연스럽게 만드나?',
-          a: '저장값 = `CDF_PROB_TOP - 누적확률`이라 심볼이 커질수록 값이 작아짐. `v`를 큰 경계→작은 경계로 내려가며 `c<v`인 동안 반복 → `c>=v`에서 멈춘 `ret`이 c가 속한 구간.',
-          hint: '저장값과 누적확률의 관계.' },
-        { q: '이 함수는 심볼 몇 개를 디코드하나? 루프의 정체는?',
-          a: '**1개.** 루프는 그 1심볼의 구간을 역CDF에서 선형 탐색하는 것(심볼 여러 개가 아님).',
-          hint: 'ret의 의미.' },
-        { q: '엔진이 AV1과 같은데 AV2가 손댄 디테일 하나는?',
-          a: '`od_ec_prob_scale`의 `av2_prob_inc_tbl[nsym-2][n]` — 학습된 per-(알파벳,위치) 확률 미세증분. 코어 알고리즘은 동일.',
-          hint: 'prob_scale 안의 테이블.' },
+        { q: 'Why is `icdf` an "inverse" CDF, and why does that make the `c < v` test natural?',
+          a: 'Stored value = `CDF_PROB_TOP - cumulative`, so the value shrinks as the symbol index grows. Walking `v` from the high boundary downward while `c < v`, the `ret` where it stops (`c >= v`) is the interval `c` belongs to.',
+          hint: 'Relation between the stored value and the cumulative probability.' },
+        { q: 'How many symbols does this function decode? What is the loop actually doing?',
+          a: '**One.** The loop is a linear search over the inverse CDF for that single symbol\'s sub-interval (not multiple symbols).',
+          hint: 'Meaning of ret.' },
+        { q: 'The engine equals AV1 — name one detail AV2 changed here.',
+          a: '`av2_prob_inc_tbl[nsym-2][n]` inside `od_ec_prob_scale` — a trained per-(alphabet, position) probability increment. The core algorithm is identical.',
+          hint: 'The table inside prob_scale.' },
       ],
     },
-    { id: 'e3', n: 3, title: '정규화·비트회계', fn: { name: 'od_ec_dec_normalize' }, ready: false },
-    { id: 'e4', n: 4, title: '심볼 read·CDF 업데이트', fn: { name: 'avm_read_symbol / update_cdf' }, ready: false },
-    { id: 'e5', n: 5, title: 'CDF 선택·컨텍스트 유도', fn: { name: 'cdf selection (§8.3.2)' }, ready: false },
-    { id: 'e6', n: 6, title: '계수블록 진입', fn: { name: 'av2_read_coeffs_txb_facade' }, ready: false },
-    { id: 'e7', n: 7, title: 'EOB 디코드', fn: { name: 'decode_eob' }, ready: false },
-    { id: 'e8', n: 8, title: 'base+low-range 역스캔', fn: { name: 'read_coeffs_reverse_2d' }, ready: false },
-    { id: 'e9', n: 9, title: '⭐ TCQ 상태기계', fn: { name: 'tcq_next_state' }, ready: false },
-    { id: 'e10', n: 10, title: 'high-range Rice/Golomb', fn: { name: 'read_adaptive_hr' }, ready: false },
-    { id: 'e11', n: 11, title: 'HW 종합 (ENT 스테이지)', fn: { name: '(전체)' }, ready: false },
+    { id: 'e3', n: 3, title: 'Renormalization & bit accounting', stage: 'skeleton',
+      fn: { name: 'od_ec_dec_normalize', file: 'avm_dsp/entdec.h', line: 140,
+        role: 'After each symbol: shift range back to >= 32768, consume d bits from the window, refill if low.' },
+      spec: { num: '8.2.6', title: 'Symbol decoding process (renorm)' },
+      hw: { questions: [
+        'Leading-zero count OD_ILOG_NZ(rng) → variable left-shift. Cost of a fixed LZ-count + barrel shifter?',
+        'cnt < OD_EC_MIN_BITS → refill is a data-dependent branch. How to hide refill latency in the pipe?',
+        '64-bit window consumes d bits/symbol. Refill bandwidth vs symbol rate — where is the bottleneck?',
+      ], derived: null } },
+    { id: 'e4', n: 4, title: 'Symbol read & CDF update', stage: 'skeleton',
+      fn: { name: 'avm_read_symbol / update_cdf', file: 'avm_dsp/bitreader.h', line: 61,
+        role: 'Wrapper: decode via od_ec, then adapt the active CDF (update_cdf) when allow_update_cdf.' },
+      spec: { num: '8.3', title: 'Parsing process for CDF encoded syntax elements' },
+      hw: { questions: [
+        'update_cdf is a read-modify-write on the active CDF every symbol. Single-cycle RMW SRAM/regfile feasible?',
+        'allow_update_cdf gate — does HW always pay the update, or skip for static CDFs?',
+        'CDFs are uint16 arrays in per-tile FRAME_CONTEXT — which subset is hot, and where does it live (SRAM vs registers)?',
+      ], derived: null } },
+    { id: 'e5', n: 5, title: 'CDF selection & context', stage: 'skeleton',
+      fn: { name: 'cdf selection (context derivation)',
+        role: 'Derive the context index (neighbors / position / plane) and pick the CDF to decode with.' },
+      spec: { num: '8.3.2', title: 'Cdf selection process' },
+      hw: { questions: [
+        'Context index from above/left neighbors → combinational logic depth before the CDF address is ready.',
+        'Neighbor context = line-buffer reads. Above-context width = frame width; sizing?',
+        'Can the context (and CDF address) be precomputed/pipelined ahead of the serial symbol decode?',
+      ], derived: null } },
+    { id: 'e6', n: 6, title: 'Coefficient block entry', stage: 'skeleton',
+      fn: { name: 'av2_read_coeffs_txb_facade', file: 'av2/decoder/decodetxb.c', line: 979,
+        role: 'Enter coefficient decode for one TX block: build TXB_CTX, read txb_skip/tx_type, dispatch FSC vs normal.' },
+      spec: { num: '5.20.6', title: 'Transform and quantization structures' },
+      hw: { questions: [
+        'TXB_CTX setup per block — how much derived state, computed once per TX block?',
+        'FSC vs normal dispatch — control overhead and divergent datapaths.',
+        'Pipeline fill cost entering the per-coefficient serial loop for each block.',
+      ], derived: null } },
+    { id: 'e7', n: 7, title: 'EOB decode', stage: 'skeleton',
+      fn: { name: 'decode_eob', file: 'av2/decoder/decodetxb.c', line: 300,
+        role: 'Decode the end-of-block position token (eob_flag_cdf16..1024 by TX size), then extra bits.' },
+      spec: { num: '5.20.6', title: 'Transform and quantization structures' },
+      hw: { questions: [
+        'eob_flag_cdf{16..1024} banked by TX size — ROM/SRAM layout for the EOB CDF tables?',
+        'EOB position then extra + literal — branch/sequence structure.',
+        'EOB sets the downstream coeff-loop length → scheduling / early-termination.',
+      ], derived: null } },
+    { id: 'e8', n: 8, title: 'Base + low-range reverse scan', stage: 'skeleton',
+      fn: { name: 'read_coeffs_reverse_2d', file: 'av2/decoder/decodetxb.c', line: 162,
+        role: 'Reverse-scan base level + low-range per position; advances the TCQ state each coefficient.' },
+      spec: { num: '5.20.6', title: 'Transform and quantization structures' },
+      hw: { questions: [
+        'Reverse scan order — position generator (scan LUT vs computed addresses)?',
+        'Each position: base + low-range CDF reads + tcq_next_state update = per-coeff carried state.',
+        'Level scratch buffer levels[] for context — local SRAM size = f(TX width)?',
+      ], derived: null } },
+    { id: 'e9', n: 9, title: '⭐ TCQ state machine', stage: 'skeleton',
+      fn: { name: 'tcq_next_state', file: 'av2/common/quant_common.c', line: 73,
+        role: '8-state FSM: parity of |level| picks the next state via an 8x2 LUT; state selects CDF and Q0/Q1.' },
+      spec: { num: '5.20.6', title: 'Transform and quantization structures' },
+      hw: { questions: [
+        '8-state FSM, next_state_lut_8st[8][2] indexed by (state, parity) — pure combinational; place it where in the pipe?',
+        'State feeds BOTH CDF selection and dequant → couples entropy parse with dequant. Stage-partition implications?',
+        'tcq_quant(state) = state & 2 → carried state, no lookahead. Impact on the per-coeff critical path?',
+      ], derived: null } },
+    { id: 'e10', n: 10, title: 'High-range Rice / Golomb', stage: 'skeleton',
+      fn: { name: 'read_adaptive_hr', file: 'av2/decoder/decodetxb.c', line: 112,
+        role: 'High-range suffix: adaptive Truncated-Rice / Exp-Golomb via bypass bits (no CDF).' },
+      spec: { num: '5.20.6', title: 'Transform and quantization structures' },
+      hw: { questions: [
+        'Bypass bits = no CDF → multi-bit shifter; how many bits/cycle can the suffix decode?',
+        'Rice param m adapts from running hr_avg — small accumulator + table lookup.',
+        'HR engages only for large levels (rare). Share datapath with the bypass path or dedicate one?',
+      ], derived: null } },
+    { id: 'e11', n: 11, title: 'HW synthesis (ENT stage)', stage: 'skeleton',
+      fn: { name: '(whole stage)',
+        role: 'Put it together: throughput ceiling, total CDF SRAM, the serial critical path, the parallelism axis.' },
+      hw: { questions: [
+        'Symbol/cycle ceiling from the serial chain (CDF-search iters + multiply + normalize + TCQ update).',
+        'Total CDF SRAM budget (TCQ_CTXS, parity-hiding, EOB banks) — sizing.',
+        'Tile-level parallelism is the only scaling axis — how many entropy instances for a target Mpix/s?',
+        'Where can you pipeline without breaking the carried od_ec_dec + TCQ state?',
+      ], derived: null } },
   ],
 };
