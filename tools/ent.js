@@ -265,16 +265,23 @@ window.TOOL = {
           mermaid:
 'graph TD\n' +
 '  A["ret = -1, v = r"] --> B["u = v; ret++;<br/>v = scaled icdf boundary"]\n' +
-'  B --> C{"c < v ?"}\n' +
+'  B --> C{"c &lt; v ?"}\n' +
 '  C -->|yes| B\n' +
-'  C -->|no| D["symbol = ret<br/>interval v..u"]' },
+'  C -->|no| D["symbol = ret<br/>interval v..u"]\n' +
+'  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+'  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+'  classDef out fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+'  class B op;\n  class C hot;\n  class D out;' },
         { title: 'Serial dependency — the ENT throughput wall',
           mermaid:
-'graph LR\n' +
+'graph TD\n' +
 '  P["decode symbol n-1"] --> S["dec.dif / rng / cnt<br/>carried state"]\n' +
 '  S --> N["decode symbol n"]\n' +
-'  N --> S2["next state"]\n' +
-'  S2 --> M["decode symbol n+1"]',
+'  N --> S2["updated state"]\n' +
+'  S2 --> M["decode symbol n+1"]\n' +
+'  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+'  classDef op fill:#161b22,stroke:#2b3440,color:#e6edf3;\n' +
+'  class S hot;\n  class S2 hot;\n  class P op;\n  class N op;\n  class M op;',
           caption: 'Each call read-modify-writes the same decoder state, so calls cannot overlap — this is why ENT is the throughput bottleneck.' },
       ],
       walkthrough: [
@@ -317,16 +324,21 @@ window.TOOL = {
           ] },
       ],
       hw: {
-        datapath: 'graph LR\n' +
+        datapath: 'graph TD\n' +
           '  WIN["dif window (64b)"] --> TOP["top 16b → c"]\n' +
-          '  ICDF["icdf[ret]<br/>(CDF SRAM)"] --> PS["prob_scale<br/>mul rr*pp + shift"]\n' +
-          '  PARA["prob_inc_tbl<br/>(ROM)"] --> PS\n' +
-          '  TOP --> CMP{"c < v ?"}\n' +
+          '  TOP --> CMP{"c &lt; v ?"}\n' +
+          '  ICDF["icdf[ret]<br/>CDF SRAM"] --> PS["prob_scale<br/>mul rr*pp + shift"]\n' +
+          '  PARA["prob_inc_tbl<br/>ROM"] --> PS\n' +
           '  PS --> CMP\n' +
           '  CMP -->|yes, ret++| ICDF\n' +
-          '  CMP -->|no| RNG["r = u-v"]\n' +
+          '  CMP -->|no| RNG["r = u - v"]\n' +
           '  RNG --> NRM["normalize<br/>LZ-count + shift + refill"]\n' +
-          '  NRM --> WIN',
+          '  NRM --> WIN\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+          '  class ICDF mem;\n  class PARA rom;\n  class PS op;\n  class RNG op;\n  class NRM op;\n  class CMP hot;',
         questions: [
           'The do-while is a **data-dependent loop** (≤ nsyms = 16). 16-way parallel compare for a fixed 1-cycle vs sequential iteration — area vs frequency trade?',
           'The multiply `rr*pp` in `od_ec_prob_scale` sits inside the loop. Multiply per iteration vs precompute all boundaries? Where can you pipeline?',
