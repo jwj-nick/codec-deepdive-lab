@@ -263,6 +263,17 @@ th{background:var(--panel2);color:var(--mut);font-weight:600}
 .io-table tr.io-out{box-shadow:inset 3px 0 0 var(--good)}
 .io-table code{color:var(--acc2)}
 
+/* ── Decoder-NPU synthesis page ── */
+.thesis{background:#10171a;border:1px solid #25403a;border-left:3px solid var(--good);border-radius:8px;
+  padding:11px 14px;margin:14px 0;font-size:.95rem;color:var(--fg)}
+.thesis b{color:var(--acc2)}
+.npu-table{font-size:.86rem;display:block;overflow-x:auto}
+.npu-table th{background:var(--panel2);color:var(--mut);font-family:var(--mono);font-size:.72rem;white-space:nowrap}
+.npu-table td{vertical-align:top}
+.npu-table .npu-k{font-weight:700}
+.npu-table .npu-k a{color:var(--acc2)}
+.npu-table tr:hover{background:var(--panel)}
+
 /* ── Dataflow page (per-SB / filter passes) ── */
 .df-stages{display:grid;gap:12px;margin-top:8px}
 .df-stage{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px}

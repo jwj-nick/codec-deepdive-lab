@@ -72,6 +72,37 @@ window.Render = (function () {
     return '<div class="df-stage">' + head + (s.role ? '<p class="muted">' + inl(s.role) + '</p>' : '') + tbl + '</div>';
   }
 
+  // ── Decoder-NPU synthesis view (cross-stage integer-MAC blocks) ──
+  function npu(T) {
+    if (!T) return;
+    const mini = document.getElementById('stagemap-mini');
+    if (mini) mini.innerHTML = StageMap.renderMini('npu', []);
+    document.title = T.title + ' — Deep-Dive Lab';
+    const root = document.getElementById('root');
+    const hero = '<section class="tool-hero"><div class="th-tag">DECODER-NPU</div>' +
+      '<h1>' + esc(T.title) + '</h1>' +
+      (T.intro ? '<p class="th-role">' + inl(T.intro) + '</p>' : '') + '</section>';
+    const thesis = T.thesis ? '<div class="thesis">💡 ' + inl(T.thesis) + '</div>' : '';
+    const sig = T.diagram ? sectionWrap('npu-sig', 'The shared datapath signature',
+      '<p class="muted">Every block below instantiates this one shape — that is the thesis.</p>' + mermaidBox(T.diagram, 'decoder-NPU datapath signature')) : '';
+    const rows = (T.blocks || []).map(b => {
+      const name = (b.tool && b.ch) ? '<a href="app.html?tool=' + esc(b.tool) + '&ch=' + esc(b.ch) + '">' + esc(b.key) + '</a>' : esc(b.key);
+      return '<tr><td class="npu-k">' + name + '</td><td>' + esc(b.stage || '') + '</td>' +
+        '<td>' + inl(b.mac || '') + '</td><td>' + inl(b.weights || '') + '</td>' +
+        '<td>' + inl(b.act || '') + '</td><td>' + inl(b.pipe || '') + '</td></tr>';
+    }).join('');
+    const table = rows ? sectionWrap('npu-inv', 'Inventory — integer MAC / solver blocks in the normative path',
+      '<table class="npu-table"><thead><tr><th>block</th><th>stage</th><th>MAC / cost</th><th>weights (ROM)</th><th>activation</th><th>pipe location</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      (T.invNote ? '<p class="muted">' + inl(T.invNote) + '</p>' : '')) : '';
+    const qs = (T.questions && T.questions.length) ? sectionWrap('npu-q', 'The architecture question (derive)',
+      '<div class="hw-openq"><p class="muted">This is yours to reason through — Nick\'s moat (20y codec + NPU target).</p><ol>' +
+      T.questions.map(q => '<li>' + inl(q) + '</li>').join('') + '</ol></div>') : '';
+    const foot = '<div class="ch-foot"><p class="muted">Each block links to its deep-dive chapter. All public — only actual RTL stays private.</p>' +
+      '<p><a href="index.html">↑ Lab</a></p></div>';
+    root.innerHTML = hero + thesis + sig + table + qs + foot;
+    postRender();
+  }
+
   function postRender() {
     if (window.hljs) document.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch (e) {} });
     renderMermaid();
@@ -333,5 +364,5 @@ window.Render = (function () {
       }));
   }
 
-  return { page: page, chapter: chapter, dataflow: dataflow };
+  return { page: page, chapter: chapter, dataflow: dataflow, npu: npu };
 })();
