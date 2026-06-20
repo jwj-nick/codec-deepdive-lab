@@ -164,15 +164,20 @@ window.TOOL = {
   hw: {
     guardrail: true,
     datapath:
-      'graph LR\n' +
-      '  BS[bitstream] --> EC["od_ec<br/>range decoder"]\n' +
+      'graph TD\n' +
+      '  BS["bitstream"] --> EC["od_ec<br/>range decoder"]\n' +
       '  CDF["CDF RMW<br/>tctx SRAM"] --> EC\n' +
       '  EC --> CDF\n' +
       '  EC --> LV["level / sign"]\n' +
       '  LV --> TCQ["TCQ FSM<br/>8-state"]\n' +
-      '  TCQ -->|q_i 선택| CDF\n' +
+      '  TCQ -->|select q_i| CDF\n' +
       '  TCQ --> DQ["dequant<br/>Q0/Q1"]\n' +
-      '  DQ --> OUT[dqcoeff → IQT]',
+      '  DQ --> OUT["dqcoeff → IQT"]\n' +
+      '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+      '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+      '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+      '  class BS mem;\n  class CDF mem;\n  class OUT mem;\n' +
+      '  class EC hot;\n  class TCQ hot;\n  class LV op;\n  class DQ op;',
     throughput:
       '**본질적 순차.** 심볼 1개 = `od_ec` 상태(dif/rng/cnt) 읽기 → 역CDF 선형탐색(최대 nsyms≤16 반복) → 정규화 → `update_cdf` RMW. ' +
       '다음 심볼은 갱신된 상태에 의존 → **≈1 symbol/clk 상한**, 계수 많은 블록이 전체 fps를 좌우. ' +
@@ -323,6 +328,29 @@ window.TOOL = {
             { f: 'av2_prob_inc_tbl[15][16]', d: 'trained PARA increment (entcode.h:37)' },
           ] },
       ],
+      io: {
+        diagCaption: 'one symbol decode — port boundary',
+        diagram: 'graph TD\n' +
+          '  IN1["icdf[nsyms]<br/>CDF SRAM"] --> BLK["decode_cdf_q15<br/>(1 symbol)"]\n' +
+          '  IN2["dec state<br/>dif/rng/cnt regs"] --> BLK\n' +
+          '  BLK --> O1["symbol ret<br/>⌈log2 nsyms⌉ b"]\n' +
+          '  BLK --> O2["dec&#39; state<br/>RMW (serial)"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+          '  class IN1 mem;\n  class IN2 hot;\n  class BLK op;\n  class O1 op;\n  class O2 hot;',
+        in: [
+          { sig: 'dec', type: 'od_ec_dec* (dif 64b, rng 16b, cnt 16b)', peer: 'decoder state regs', vol: '3 state words', note: 'RMW — serial dependency' },
+          { sig: 'icdf', type: 'uint16[nsyms] (Q15)', peer: 'CDF SRAM', vol: 'nsyms ≤ 16', note: 'read-only this call' },
+          { sig: 'nsyms', type: 'int', peer: 'caller', vol: '≤ 16', note: 'alphabet size' },
+        ],
+        out: [
+          { sig: 'ret', type: 'symbol, ⌈log2 nsyms⌉ b', peer: '→ caller', vol: '1 symbol', note: 'decoded value' },
+          { sig: "dec'", type: 'od_ec_dec* (updated)', peer: 'state regs', vol: '3 state words', note: 'side-effect → next symbol depends on it' },
+        ],
+        note: 'This is the **leaf RTL block** of ENT. The 64b window + 16b range + 16b cnt RMW each call = the symbol-to-symbol serial chain. ' +
+          'The downstream `update_cdf` (chapter 4) adds a second RMW to the CDF SRAM.',
+      },
       hw: {
         datapath: 'graph TD\n' +
           '  WIN["dif window (64b)"] --> TOP["top 16b → c"]\n' +

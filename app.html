@@ -34,16 +34,20 @@
 <script>
   (function () {
     const id = new URLSearchParams(location.search).get('tool') || 'ent';
-    if (!StageMap.has(id)) {
+    const isDataflow = id === 'dataflow';
+    if (!isDataflow && !StageMap.has(id)) {
       document.getElementById('root').innerHTML =
         '<div class="card"><h2>알 수 없는 tool: ' + id + '</h2><p><a href="index.html">← 돌아가기</a></p></div>';
       return;
     }
     const ch = new URLSearchParams(location.search).get('ch');
-    // tool 데이터 스크립트 동적 로드 → window.TOOL → 렌더 (ch 있으면 챕터 뷰)
+    // tool 데이터 스크립트 동적 로드 → window.TOOL → 렌더 (ch 있으면 챕터 뷰, dataflow면 dataflow 뷰)
     const s = document.createElement('script');
     s.src = 'tools/' + id + '.js';
-    s.onload = function () { ch ? Render.chapter(window.TOOL, ch) : Render.page(window.TOOL); };
+    s.onload = function () {
+      if (isDataflow) Render.dataflow(window.TOOL);
+      else ch ? Render.chapter(window.TOOL, ch) : Render.page(window.TOOL);
+    };
     s.onerror = function () {
       document.getElementById('root').innerHTML =
         '<div class="card"><h2>' + StageMap.label(id) + ' — 준비 중</h2>' +

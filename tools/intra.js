@@ -121,13 +121,19 @@ window.TOOL = {
     guardrail: true,
     datapath:
       'graph TD\n' +
-      '  N["복원 이웃<br/>(above/left)"] --> FE["11-feature 벡터"]\n' +
-      '  FE --> MAC["DIP MAC<br/>64×11 정수곱누적"]\n' +
-      '  ROM["가중치 ROM<br/>[6][64][11]"] --> MAC\n' +
-      '  MAC --> RS["resample 8×8→TX"]\n' +
-      '  N --> CFL["CfL/MHCCP<br/>최소자승+V²"]\n' +
-      '  RS --> OUT[예측]\n' +
-      '  CFL --> OUT',
+      '  N["recon neighbors<br/>(above/left)"] --> FE["11-feature vector"]\n' +
+      '  FE --> MAC["DIP MAC<br/>64×11 int mul-acc"]\n' +
+      '  ROM["weight ROM<br/>[6][64][11]"] --> MAC\n' +
+      '  MAC --> RS["resample 8×8 → TX"]\n' +
+      '  N --> CFL["CfL / MHCCP<br/>least-squares + V²"]\n' +
+      '  RS --> OUT["prediction"]\n' +
+      '  CFL --> OUT\n' +
+      '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+      '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+      '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+      '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+      '  class N mem;\n  class OUT mem;\n  class ROM rom;\n' +
+      '  class FE op;\n  class RS op;\n  class CFL hot;\n  class MAC hot;',
     throughput:
       '기존 DC/방향/SMOOTH는 가벼운 per-pixel 연산. **신규는 MAC 집약:** DIP=8×8당 **704 정수 MAC**(+resample), ' +
       'MHCCP=블록당 3×3 정규방정식+가우스소거(나눗셈)+per-pixel 3-tap MAC&제곱, CfL암시=최소자승 누적+1 나눗셈. ' +
@@ -203,6 +209,30 @@ window.TOOL = {
       fn: { name: 'av2_dip_matrix_multiplication', file: 'av2/common/intra_matrix.c', line: 423,
         role: 'Matrix intra: 11-feature vector × learned uint16 ROM = 64×11 integer MACs → 8×8 pred, then resample to TX.' },
       spec: { num: '7.13.2', title: 'Intra prediction process (DIP)' },
+      io: {
+        diagCaption: 'feature gather → 64×11 MAC → resample',
+        diagram: 'graph TD\n' +
+          '  NBR["recon neighbors<br/>above/left (hbd)"] --> FE["11-feature vector<br/>uint16[11]"]\n' +
+          '  FE --> MAC["MAC array<br/>64×11 int mul-acc"]\n' +
+          '  ROM["weight ROM<br/>[mode][64][11] uint16"] --> MAC\n' +
+          '  MAC --> NRM["+offset, &gt;&gt;12, −sum<br/>clip"]\n' +
+          '  NRM --> RS["resample 8×8 → TX"]\n' +
+          '  RS --> OUT["prediction"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+          '  class NBR mem;\n  class OUT mem;\n  class ROM rom;\n  class FE op;\n  class MAC hot;\n  class NRM op;\n  class RS op;',
+        in: [
+          { sig: 'A (weights)', type: 'uint16[64×16] (11 used)', peer: 'weight ROM (per DIP mode)', vol: '64×11/mode', note: 'learned matrix; 6 modes' },
+          { sig: 'B (features)', type: 'uint16[11]', peer: 'feature buf (from recon nbr)', vol: '11', note: 'downsampled above/left + corners' },
+          { sig: 'bd', type: 'int', peer: 'caller', vol: '1', note: 'bitdepth for clip' },
+        ],
+        out: [
+          { sig: 'C (pred 8×8)', type: 'uint16[64]', peer: '→ resample → prediction', vol: '8×8, resampled to TX', note: '704 int MAC, +DIP_OFFSET >>12 −sum, clip' },
+        ],
+        note: '**The clearest decoder-NPU block:** weight ROM + integer MAC array + shift/clip activation, bit-exact. Same shape as IST/DDT/MHCCP matmuls — the case for one shared MAC array.',
+      },
       hw: { questions: [
         '64×11 = 704 int MACs per 8×8 — systolic array vs time-multiplexed MAC? Reuse for IST/DDT matmul?',
         'Weight ROM av2_intra_matrix_weights[6][64][16] uint16 — size and read bandwidth?',
@@ -228,6 +258,25 @@ window.TOOL = {
       fn: { name: 'av2_mhccp_derive_multi_param_hv', file: 'av2/common/cfl.c', line: 880,
         role: 'Per-block 3-param least-squares (non-linear V² term): build ATA 3×3, solve by Gaussian elimination.' },
       spec: { num: '7.13.6', title: 'MHCCP process' },
+      io: {
+        diagCaption: 'accumulate ATA/ATy → solve 3×3',
+        diagram: 'graph TD\n' +
+          '  NBR["L-shape recon nbr<br/>luma + chroma (hbd)"] --> FEAT["per-sample<br/>{luma, V², bias}"]\n' +
+          '  FEAT --> ACC["accumulate<br/>ATA 3×3 + ATy"]\n' +
+          '  ACC --> SOL["Gaussian elimination<br/>(fixed-point, divide)"]\n' +
+          '  SOL --> P["mhccp params[3]<br/>→ predict (mbmi)"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+          '  class NBR mem;\n  class P mem;\n  class FEAT op;\n  class ACC op;\n  class SOL hot;',
+        in: [
+          { sig: 'recon L-nbr', type: 'uint16 luma + chroma', peer: 'recon neighbor buffer', vol: '≤ MHCCP_MAX_REF_SAMPLES', note: 'builds {luma tap, V², bias} per sample' },
+        ],
+        out: [
+          { sig: 'mhccp_param', type: 'int[3] (fixed-point)', peer: '→ mbmi → predict (n7)', vol: '3 params/block', note: 'via 3×3 normal eqns + Gaussian elimination' },
+        ],
+        note: 'A **linear solver** in the normative path: 3×3 ATA accumulate + Gaussian elimination with a divide. Variable-latency — the HW question is fixed-pipe vs reciprocal approximation.',
+      },
       hw: { questions: [
         'Per-block 3×3 normal equations + Gaussian elimination (with divide) → variable-latency solver. Fixed pipe via reciprocal approx?',
         'Non-linear term V*V — a square unit per sample in the accumulation.',

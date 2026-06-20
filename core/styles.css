@@ -251,3 +251,24 @@ th{background:var(--panel2);color:var(--mut);font-weight:600}
 .ascii-fig figcaption{font:600 .8rem var(--mono);color:var(--mut);margin-bottom:6px}
 .ascii-fig .ascii{margin:0;padding:10px;background:#0b0f14;border:1px solid var(--line);border-radius:6px;
   overflow:auto;font:.8rem/1.4 var(--mono);color:var(--acc2);white-space:pre}
+
+/* ── I/O port table (RTL draft) ── */
+.io-table{font-size:.84rem;display:block;overflow-x:auto}
+.io-table th{background:var(--panel2);color:var(--mut);font-family:var(--mono);font-size:.72rem;letter-spacing:.03em;white-space:nowrap}
+.io-table td{vertical-align:top}
+.io-table .io-dir{font:600 .72rem var(--mono);text-transform:uppercase;text-align:center;white-space:nowrap}
+.io-table tr.io-in .io-dir{color:var(--acc)}
+.io-table tr.io-out .io-dir{color:var(--good)}
+.io-table tr.io-in{box-shadow:inset 3px 0 0 var(--acc)}
+.io-table tr.io-out{box-shadow:inset 3px 0 0 var(--good)}
+.io-table code{color:var(--acc2)}
+
+/* ── Dataflow page (per-SB / filter passes) ── */
+.df-stages{display:grid;gap:12px;margin-top:8px}
+.df-stage{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.df-st-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.df-hw{font:700 .72rem/1 var(--mono);letter-spacing:.05em;color:#06121f;background:var(--acc2);
+  border-radius:5px;padding:4px 8px}
+.df-fn{font:600 .9rem var(--mono);color:var(--acc)}
+a.df-fn:hover{text-decoration:underline}
+.df-stage .io-table{margin-top:8px}

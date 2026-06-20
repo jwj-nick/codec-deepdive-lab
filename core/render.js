@@ -33,8 +33,43 @@ window.Render = (function () {
     document.title = ch.title + ' — ' + T.title;
     const skel = ch.stage !== 'full'
       ? '<div class="skel-banner">🚧 <b>Skeleton</b> — line-by-line walkthrough pending. Fill while studying via <code>codec-study ' + esc(ch.id) + '</code>.</div>' : '';
-    root.innerHTML = chHeader(T, ch) + skel + chSpec(ch) + chFigures(ch) + chWalk(ch) + chStructs(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
+    root.innerHTML = chHeader(T, ch) + skel + chSpec(ch) + chFigures(ch) + chWalk(ch) + chStructs(ch) + chIO(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
     postRender();
+  }
+
+  // ── Dataflow view (top-level: one superblock through the pipeline) ──
+  function dataflow(T) {
+    if (!T) return;
+    const mini = document.getElementById('stagemap-mini');
+    if (mini) mini.innerHTML = StageMap.renderMini('dataflow', []);
+    document.title = T.title + ' — Deep-Dive Lab';
+    const root = document.getElementById('root');
+    const hero = '<section class="tool-hero">' +
+      '<div class="th-tag">DATAFLOW</div>' +
+      '<h1>' + esc(T.title) + '</h1>' +
+      (T.intro ? '<p class="th-role">' + inl(T.intro) + '</p>' : '') + '</section>';
+    const loops = (T.loops || []).map(dfLoop).join('');
+    const foot = '<div class="ch-foot"><p class="muted">Each stage box links to its deep-dive tool. ' +
+      'I/O formats here are the public draft; only actual RTL stays private.</p>' +
+      '<p><a href="index.html">↑ Lab</a></p></div>';
+    root.innerHTML = hero + loops + foot;
+    postRender();
+  }
+  function dfLoop(lp) {
+    const diag = lp.diagram ? mermaidBox(lp.diagram, lp.diagCaption || 'dataflow') : '';
+    const stages = (lp.stages || []).map(dfStage).join('');
+    return sectionWrap('df-' + esc(lp.id || ''), lp.title || '',
+      (lp.caption ? '<p class="muted">' + inl(lp.caption) + '</p>' : '') + diag +
+      '<div class="df-stages">' + stages + '</div>');
+  }
+  function dfStage(s) {
+    const head = '<div class="df-st-head">' +
+      '<span class="df-hw">' + esc(s.hw || '') + '</span>' +
+      (s.tool ? '<a class="df-fn" href="app.html?tool=' + esc(s.tool) + '">' + esc(s.fn || s.tool) + ' →</a>'
+              : '<span class="df-fn">' + esc(s.fn || '') + '</span>') + '</div>';
+    const ports = (s.in || []).map(p => portRow(p, 'in')).concat((s.out || []).map(p => portRow(p, 'out'))).join('');
+    const tbl = ports ? '<table class="io-table">' + ioHead + '<tbody>' + ports + '</tbody></table>' : '';
+    return '<div class="df-stage">' + head + (s.role ? '<p class="muted">' + inl(s.role) + '</p>' : '') + tbl + '</div>';
   }
 
   function postRender() {
@@ -107,9 +142,32 @@ window.Render = (function () {
     if (!ch.structs || !ch.structs.length) return '';
     return sectionWrap('ch-structs', 'L3 · Data structures & constants', ch.structs.map(structBlock).join(''));
   }
+  // ── I/O ports (RTL port draft) ──────────────────────────────
+  const ioHead = '<thead><tr><th>dir</th><th>signal</th><th>type · width</th><th>src · dst</th><th>per-SB volume</th><th>notes</th></tr></thead>';
+  function portRow(p, dir) {
+    dir = p.dir || dir || 'in';
+    return '<tr class="io-' + esc(dir) + '"><td class="io-dir">' + esc(dir) + '</td>' +
+      '<td><code>' + esc(p.sig || '') + '</code></td>' +
+      '<td>' + inl(p.type || '') + '</td>' +
+      '<td>' + inl(p.peer || '') + '</td>' +
+      '<td>' + inl(p.vol || '') + '</td>' +
+      '<td>' + inl(p.note || '') + '</td></tr>';
+  }
+  function chIO(ch) {
+    const io = ch.io; if (!io) return '';
+    const diag = io.diagram ? mermaidBox(io.diagram, io.diagCaption || 'I/O block diagram') : '';
+    const rows = (io.in || []).map(p => portRow(p, 'in'))
+      .concat((io.out || []).map(p => portRow(p, 'out')))
+      .concat((io.ports || []).map(p => portRow(p))).join('');
+    const tbl = rows ? '<table class="io-table">' + ioHead + '<tbody>' + rows + '</tbody></table>' : '';
+    const note = io.note ? '<p class="muted">' + inl(io.note) + '</p>' : '';
+    return sectionWrap('ch-io', 'I/O ports (RTL draft)',
+      '<p class="muted">The function as a small RTL block: what crosses its boundary, in what format. Feeds the stage-level I/O synthesis.</p>' +
+      diag + tbl + note);
+  }
   function chHW(ch) {
     const h = ch.hw; if (!h) return '';
-    const guard = '<div class="hw-guard">⚠️ <b>HW = general architecture reasoning</b> (derivable from public code). This section is <b>yours to derive</b> (Socratic). IP-specific numbers — SRAM bits, cycle counts, your pipeline — stay private.</div>';
+    const guard = '<div class="hw-guard">💡 <b>HW architecture reasoning</b> — datapath, ports, bandwidth, MAC/SRAM estimates, all derived from public AVM source + AV2 spec. This section is <b>yours to derive</b> (Socratic). Only actual RTL/Verilog code stays in the private repo.</div>';
     const dp = h.datapath ? mermaidBox(h.datapath, 'datapath skeleton') : '';
     const qs = (h.questions && h.questions.length)
       ? '<div class="hw-openq"><h3>Guiding questions (derive)</h3><ol>' + h.questions.map(q => '<li>' + inl(q) + '</li>').join('') + '</ol></div>' : '';
@@ -202,8 +260,8 @@ window.Render = (function () {
   function secHW(T) {
     const h = T.hw; if (!h) return '';
     const guard = h.guardrail === false ? '' :
-      '<div class="hw-guard">⚠️ <b>일반 HW 사고법</b> — 공개 spec·오픈소스 코드에서 도출 가능한 수준. ' +
-      '특정 IP의 SRAM bit·대역폭 정량은 범위 밖.</div>';
+      '<div class="hw-guard">💡 <b>HW architecture reasoning</b> — derived from public AVM source + AV2 spec. ' +
+      'Datapath, bandwidth, MAC/SRAM estimates all in scope. Only actual RTL/Verilog code stays private.</div>';
     const dp = h.datapath ? mermaidBox(h.datapath, 'datapath 개념도') : '';
     const rows = [
       ['throughput / 파이프라인', h.throughput],
@@ -275,5 +333,5 @@ window.Render = (function () {
       }));
   }
 
-  return { page: page, chapter: chapter };
+  return { page: page, chapter: chapter, dataflow: dataflow };
 })();

@@ -122,11 +122,16 @@ window.TOOL = {
     guardrail: true,
     datapath:
       'graph TD\n' +
-      '  SB["256×256 SB"] --> REC["분할 재귀<br/>(트리 하강)"]\n' +
-      '  REC -->|키프레임 64×64| SDP["SDP: luma 트리<br/>먼저 settle"]\n' +
-      '  SDP --> CH["chroma 트리<br/>(luma 참조)"]\n' +
-      '  REC --> LEAF["leaf 블록<br/>모드/MV 복호"]\n' +
-      '  CTX["above/left 컨텍스트<br/>(plane별 라인버퍼)"] --> REC',
+      '  SB["256×256 SB"] --> REC["partition recursion<br/>(tree descent)"]\n' +
+      '  CTX["above/left context<br/>(per-plane line buffer)"] --> REC\n' +
+      '  REC -->|"keyframe 64×64"| SDP["SDP: luma tree<br/>settles first"]\n' +
+      '  SDP --> CH["chroma tree<br/>(references luma)"]\n' +
+      '  REC --> LEAF["leaf block<br/>mode / MV decode"]\n' +
+      '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+      '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+      '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+      '  class SB mem;\n  class CTX mem;\n' +
+      '  class REC op;\n  class LEAF op;\n  class SDP hot;\n  class CH hot;',
     throughput:
       '분할타입이 **노드당 최대 5개 직렬 산술심볼**(AV1 단일 read 대비) + 각 심볼이 이웃 컨텍스트 유도 필요 → ' +
       '파티션 노드당 CDF-read 지연 증가. ENT와 강결합(분할/모드도 산술복호). 256 SB로 재귀 깊이 +1단.',
@@ -194,6 +199,31 @@ window.TOOL = {
       fn: { name: 'decode_partition (SDP path)', file: 'av2/decoder/decodeframe.c', line: 1879,
         role: 'Keyframe 64×64: decode the luma partition tree first, then chroma references it (args swapped).' },
       spec: { num: '5.20.3', title: 'Partition structures (SDP)' },
+      io: {
+        diagCaption: 'luma tree settles → chroma references it',
+        diagram: 'graph TD\n' +
+          '  SYM["partition symbols<br/>← ENT"] --> LT["LUMA_PART tree<br/>decode_partition"]\n' +
+          '  CTXL["above/left ctx<br/>plane 0 (line buf)"] --> LT\n' +
+          '  LT --> PTL["ptree_luma<br/>(settled)"]\n' +
+          '  PTL --> CT["CHROMA_PART tree<br/>(references ptree_luma)"]\n' +
+          '  CTXC["above/left ctx<br/>plane 1/2 (line buf)"] --> CT\n' +
+          '  LT --> OUTL["luma geometry → PRD/IQT"]\n' +
+          '  CT --> OUTC["chroma geometry → PRD/IQT"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+          '  class SYM mem;\n  class CTXL mem;\n  class CTXC mem;\n  class OUTL mem;\n  class OUTC mem;\n' +
+          '  class LT op;\n  class CT op;\n  class PTL hot;',
+        in: [
+          { sig: 'partition sym', type: 'hierarchical multi-symbol', peer: '← ENT', vol: '≤5/node', note: 'do_split→…→4way' },
+          { sig: 'above/left ctx', type: 'partition context [MAX_MB_PLANE]', peer: 'line buffer (per plane)', vol: '~3× single-tree', note: 'SDP splits luma/chroma context' },
+        ],
+        out: [
+          { sig: 'ptree_luma', type: 'PARTITION_TREE', peer: 'SB_INFO.ptree_root[0]', vol: '1 luma tree/SB', note: 'must settle before chroma tree starts' },
+          { sig: 'ptree_chroma', type: 'PARTITION_TREE', peer: 'SB_INFO.ptree_root[1]', vol: '1 chroma tree/SB', note: 'references ptree_luma → luma→chroma serial' },
+        ],
+        note: 'The luma→chroma data dependency (ptree_luma feeds the chroma tree) is an **intra-SB serialization**: chroma partitioning cannot start until the co-located luma tree is settled.',
+      },
       hw: { questions: [
         'luma→chroma dependency within the SB → serializes the two trees. Separate passes vs interleave?',
         'Two ptree roots per SB — partition-tree state doubled.',

@@ -110,13 +110,18 @@ window.TOOL = {
   hw: {
     guardrail: true,
     datapath:
-      'graph LR\n' +
-      '  MVB["ref-MV bank"] --> MC["MC 보간<br/>8/12-tap"]\n' +
+      'graph TD\n' +
+      '  MVB["ref-MV bank"] --> MC["MC interpolation<br/>8 / 12-tap"]\n' +
       '  DRAM["ref frame<br/>(DRAM)"] --> MC\n' +
+      '  TIP["TIP frame<br/>(separate MC pass)"] --> MC\n' +
       '  MC --> DMVR["DMVR<br/>24-SAD"]\n' +
-      '  DMVR --> OF["광류 LS<br/>gradient+solve"]\n' +
-      '  OF --> CP["compound<br/>BAWP/CWP"]\n' +
-      '  TIP["TIP 프레임<br/>(별도 MC 패스)"] --> MC',
+      '  DMVR --> OF["optical-flow LS<br/>gradient + solve"]\n' +
+      '  OF --> CP["compound<br/>BAWP / CWP"]\n' +
+      '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+      '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+      '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+      '  class DRAM mem;\n  class TIP mem;\n  class MVB mem;\n' +
+      '  class MC hot;\n  class DMVR op;\n  class OF hot;\n  class CP op;',
     throughput:
       '**MC가 DRAM 대역폭 지배.** AV2가 늘리는 비용: 12-tap fetch 윈도우 (bw+11)²(8-tap (bw+7)² 대비↑), ' +
       '**TIP = 프레임 전체 추가 MC 패스**(2참조 compound), **DMVR = 24 SAD 평가**(확장 윈도우 재fetch), ' +
@@ -191,6 +196,25 @@ window.TOOL = {
       fn: { name: 'av2_setup_tip_motion_field', file: 'av2/common/tip.c', line: 243,
         role: 'Project stored tpl_mvs onto the TIP frame, fill holes (4-neighbor), 5-tap MV average.' },
       spec: { num: '7.10', title: 'Setup TIP motion field process' },
+      io: {
+        diagCaption: 'project → hole-fill → average (frame pre-pass)',
+        diagram: 'graph TD\n' +
+          '  TPL["tpl_mvs<br/>stored motion field (DRAM)"] --> PRJ["project<br/>get_mv_projection_clamp"]\n' +
+          '  PRJ --> FILL["hole fill<br/>4-neighbor propagate"]\n' +
+          '  FILL --> AVG["5-tap MV average<br/>(LUT, no divide)"]\n' +
+          '  AVG --> OUT["TIP motion field<br/>→ frame build (r4)"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  class TPL mem;\n  class OUT mem;\n  class PRJ op;\n  class FILL op;\n  class AVG op;',
+        in: [
+          { sig: 'tpl_mvs', type: 'MV field (int16 x/y)', peer: 'motion-field storage (DRAM)', vol: 'per 8×8 grid / frame', note: 'projected by ref distance' },
+          { sig: 'ref order/scale', type: 'int', peer: 'frame header', vol: 'few/frame', note: 'projection scale' },
+        ],
+        out: [
+          { sig: 'tip_mf', type: 'MV grid', peer: '→ TIP frame build (r4)', vol: 'frame grid', note: 'project + hole-fill + 5-tap avg; frame-level pre-pass' },
+        ],
+        note: 'A **frame-level serial pre-pass** — must finish before any block that references the TIP frame decodes (frame barrier).',
+      },
       hw: { questions: [
         'Frame-level motion-field passes (project/fill/average) — serial preprocessing before block decode?',
         'tpl_mvs storage + projection arithmetic — memory and compute?',
@@ -223,6 +247,26 @@ window.TOOL = {
       fn: { name: 'av2_opfl_mv_refinement', file: 'av2/common/reconinter.c', line: 1048,
         role: 'Accumulate gradient covariance (∑gx², ∑gxgy, ∑gy², ∑gxΔ, ∑gyΔ) → regularized least-squares MV at 1/16-pel.' },
       spec: { num: '7.13.3', title: 'Inter prediction process (optical flow)' },
+      io: {
+        diagCaption: 'accumulate 5 sums → regularized LS',
+        diagram: 'graph TD\n' +
+          '  GX["gx, gy<br/>int16 gradients (r6)"] --> ACC["covariance accumulate<br/>∑gx² ∑gxgy ∑gy² ∑gxΔ ∑gyΔ"]\n' +
+          '  PD["pdiff Δ<br/>int16 (ref0−ref1)"] --> ACC\n' +
+          '  ACC --> SOL["regularized LS solve<br/>calc_mv_process (divide)"]\n' +
+          '  SOL --> MV["refined MV 1/16-pel<br/>→ re-predict (MC)"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+          '  class GX mem;\n  class PD mem;\n  class MV mem;\n  class ACC op;\n  class SOL hot;',
+        in: [
+          { sig: 'gx, gy', type: 'int16[bw×bh]', peer: 'gradient buffer (r6)', vol: 'block', note: 'spatial gradients of predictors' },
+          { sig: 'pdiff (Δ)', type: 'int16[bw×bh]', peer: 'pred-diff buffer', vol: 'block', note: 'ref0 − ref1 prediction' },
+        ],
+        out: [
+          { sig: 'vx0/vy0/vx1/vy1', type: 'int (1/16-pel)', peer: '→ re-predict (MC pass)', vol: 'per block/subblock', note: 'regularized LS; rls_alpha = f(block size)' },
+        ],
+        note: 'Third decoder least-squares unit (after CfL-implicit and MHCCP): 5-sum covariance + a small solve. Followed by a **second MC pass** to rebuild the refined predictor.',
+      },
       hw: { questions: [
         'Covariance accumulation (5 sums) + a small solve → another decoder LS unit. Share with MHCCP/CfL solvers?',
         'Regularization rls_alpha = f(block size) — fixed-point divide in calc_mv_process?',

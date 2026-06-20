@@ -134,13 +134,17 @@ window.TOOL = {
   hw: {
     guardrail: true,
     datapath:
-      'graph LR\n' +
-      '  DQU["dqcoeff U"] --> CCX["CCTX<br/>2×2 회전"]\n' +
+      'graph TD\n' +
+      '  DQU["dqcoeff U"] --> CCX["CCTX<br/>2×2 rotate"]\n' +
       '  DQV["dqcoeff V"] --> CCX\n' +
-      '  CCX --> ISTc["IST<br/>2차(좌상단)"]\n' +
-      '  DQY["dqcoeff Y"] --> ISTc\n' +
-      '  ISTc --> P["1차 2D<br/>1D row→col<br/>(DDT 대체)"]\n' +
-      '  P --> ADD["clip + add<br/>→ 예측"]',
+      '  DQY["dqcoeff Y"] --> ISTc["IST<br/>secondary (top-left)"]\n' +
+      '  CCX --> ISTc\n' +
+      '  ISTc --> P["primary 2D<br/>1D row → col<br/>(DDT replace)"]\n' +
+      '  P --> ADD["clip + add<br/>→ prediction"]\n' +
+      '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+      '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+      '  class DQU mem;\n  class DQV mem;\n  class DQY mem;\n' +
+      '  class CCX op;\n  class ISTc op;\n  class P op;\n  class ADD op;',
     throughput:
       '**가장 병렬친화 스테이지.** 1차 변환은 분리형(행 1D→열 1D, 버터플라이 파이프) → 픽셀 병렬, 고throughput. ' +
       'IST/CCTX는 작은 오버헤드(좌상단 계수·계수당 소수 곱). 64폭은 좌상단 32만 비영(zero-out+2배 복제)이라 연산 절감. ' +
@@ -218,6 +222,29 @@ window.TOOL = {
       fn: { name: 'av2_inv_cross_chroma_tx_block', file: 'av2/common/idct.c', line: 964,
         role: 'Rotate U/V dequant coeffs by a 2×2 matrix [cosθ,sinθ]·256, round, clamp. 4 mults/coeff.' },
       spec: { num: '7.14.3', title: 'Reconstruct process (CCTX)' },
+      io: {
+        diagCaption: 'U/V 2×2 rotation — cross-plane join',
+        diagram: 'graph TD\n' +
+          '  U["dqcoeff U<br/>int32[ncoeff]"] --> R["2×2 rotate<br/>4 mul/coeff"]\n' +
+          '  V["dqcoeff V<br/>int32[ncoeff]"] --> R\n' +
+          '  ROM["cctx_mtx[7][2]<br/>[cosθ,sinθ]·256"] --> R\n' +
+          '  R --> UO["U&#39; → IST/2D"]\n' +
+          '  R --> VO["V&#39; → IST/2D"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  class U mem;\n  class V mem;\n  class ROM rom;\n  class R op;\n  class UO op;\n  class VO op;',
+        in: [
+          { sig: 'c1 (U)', type: 'tran_low_t int32[ncoeff]', peer: 'dqcoeff U buffer', vol: '≤ TX area', note: 'in-place RMW' },
+          { sig: 'c2 (V)', type: 'tran_low_t int32[ncoeff]', peer: 'dqcoeff V buffer', vol: '≤ TX area', note: 'cross-plane join — both must be ready' },
+          { sig: 'cctx_type', type: 'CctxType enum', peer: '← parse', vol: '1/block', note: 'selects 1 of 7 angles' },
+          { sig: 'cctx_mtx', type: 'int[7][2] ([cosθ,sinθ]·256)', peer: 'ROM', vol: '2 coeffs/type', note: 'rotation matrix' },
+        ],
+        out: [
+          { sig: "c1'/c2'", type: 'int32 (rotated, clamped 8+bd)', peer: '→ IST / 2D inv-tx', vol: 'same buffers', note: '4 mults/coeff, ROUND>>CCTX_PREC_BITS' },
+        ],
+        note: 'Breaks plane independence: the U and V coeff buffers are read **together**. Schedule chroma as a pair, or insert a small rotate unit between dequant and the per-plane transform.',
+      },
       hw: { questions: [
         'Needs BOTH U and V buffers present → cross-plane join. Schedule chroma together or insert a rotate unit?',
         '4 mults/coeff — small MAC. Share with the transform datapath or dedicate?',
@@ -235,6 +262,28 @@ window.TOOL = {
       fn: { name: 'av2_inv_stxfm', file: 'av2/common/idct.c', line: 1073,
         role: 'Secondary transform on top-left low-freq coeffs (4×4/8×8) via learned int16 kernel; scatter back by IST scan.' },
       spec: { num: '7.15.3', title: 'Secondary transform process' },
+      io: {
+        diagCaption: 'gather → dense matmul → scatter',
+        diagram: 'graph TD\n' +
+          '  IN["top-left coeffs<br/>16 (4×4) / 64 (8×8)"] --> G["gather<br/>(IST scan)"]\n' +
+          '  G --> MM["dense matmul<br/>K · x"]\n' +
+          '  ROM["ist kernel LUT<br/>[type][class] int32"] --> MM\n' +
+          '  MM --> S["scatter back<br/>(IST scan)"]\n' +
+          '  S --> OUT["coeffs&#39; → primary 2D"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  class IN mem;\n  class OUT mem;\n  class ROM rom;\n  class G op;\n  class MM op;\n  class S op;',
+        in: [
+          { sig: 'coeffs (low-freq)', type: 'tran_low_t int32', peer: 'dqcoeff (after CCTX)', vol: '16 (4×4) / 64 (8×8)', note: 'gathered by IST scan' },
+          { sig: 'stx_type/size_class', type: 'int', peer: '← TX_TYPE upper bits', vol: '1/block', note: 'selects kernel bank' },
+          { sig: 'ist_kernel', type: 'int32 LUT (from int16 ist_4x4_kernel[14][3][16][16])', peer: 'ROM', vol: '16×16 / 64×64 per (type,class)', note: 'dense matrix' },
+        ],
+        out: [
+          { sig: "coeffs'", type: 'int32 (scattered)', peer: '→ primary 2D inv-tx', vol: 'same positions', note: 'gather→matmul→scatter, runs before primary' },
+        ],
+        note: 'Dense small matrix-multiply — candidate to **share a MAC array with DIP/MHCCP/DDT** (the decoder-NPU thesis).',
+      },
       hw: { questions: [
         'Small dense matrix-multiply on top-left 16/64 coeffs — a MAC array. Share with DIP/MHCCP/DDT MAC?',
         'Kernel ist_4x4_kernel[14][3][16][16] int16 → int32 LUT at init. ROM size and addressing?',
@@ -260,6 +309,16 @@ window.TOOL = {
       fn: { name: 'inv_txfm_ddtx / fddt', file: 'av2/common/idct.c', line: 405,
         role: 'Learned matrix kernels (DDTX/FDDT) replacing ADST for inter blocks (replace_adst_by_ddt).' },
       spec: { num: '7.15.2', title: '1D transforms (DDT)' },
+      io: {
+        in: [
+          { sig: 'coeff line (1D)', type: 'int32', peer: '← row/col stage buffer', vol: 'size 4/8/16', note: 'replaces ADST, inter-only' },
+          { sig: 'ddt_kernel', type: 'int32 (tx_kernel_ddtx_size4/8/16)', peer: 'ROM', vol: 'N×N dense', note: 'learned matrix, not a butterfly' },
+        ],
+        out: [
+          { sig: 'residual line', type: 'int32', peer: '→ 2D accumulate', vol: 'size N', note: 'dense matmul → O(N²) vs butterfly O(N log N)' },
+        ],
+        note: 'Like IST, a **dense matmul** — the cost/benefit vs the fast butterfly path is the HW question. Inter-only ⇒ utilization depends on frame type.',
+      },
       hw: { questions: [
         'DDT = dense matrix multiply (not a fast butterfly). Dedicated unit vs general matmul shared with IST?',
         'ROM tx_kernel_ddtx_size4/8/16 — sizing; inter-only. Utilization?',

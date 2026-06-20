@@ -115,14 +115,20 @@ window.TOOL = {
   hw: {
     guardrail: true,
     datapath:
-      'graph LR\n' +
-      '  REC["복원 luma"] --> G["이웃차 22입력<br/>(fwd/bwd 게더)"]\n' +
-      '  G --> CLIP["학습 alpha 클립"]\n' +
-      '  W["weight ROM"] --> MAC["66 정수 MAC<br/>(22×3 누산)"]\n' +
+      'graph TD\n' +
+      '  REC["recon luma"] --> G["22 inputs<br/>(fwd/bwd gather)"]\n' +
+      '  G --> CLIP["learned alpha clip"]\n' +
+      '  W["weight ROM"] --> MAC["66 int MAC<br/>(22×3 accum)"]\n' +
       '  CLIP --> MAC\n' +
-      '  MAC --> NRM["+bias → 정규화 idx"]\n' +
+      '  MAC --> NRM["+bias → normalize idx"]\n' +
       '  NRM --> LUT["3D error-LUT<br/>(int8)"]\n' +
-      '  LUT --> ADD["잔차 보상 → rec 가산"]',
+      '  LUT --> ADD["residual comp → rec add"]\n' +
+      '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+      '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+      '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+      '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+      '  class REC mem;\n  class W rom;\n  class LUT rom;\n' +
+      '  class G op;\n  class CLIP op;\n  class NRM op;\n  class ADD op;\n  class MAC hot;',
     throughput:
       '체인 = **5 순차 프레임 패스**, 각 full-frame R-M-W. 비용 큰 둘: ⭐**GDF = 픽셀당 ~66 int MAC**(+클립+LUT) — luma 전 픽셀, ' +
       'PC-Wiener = 픽셀당 분류(4-feature→LUT) + 13-tap conv. CCSO/CDEF/deblock은 상대적으로 가벼움. ' +
@@ -205,6 +211,30 @@ window.TOOL = {
       fn: { name: 'apply_ccso_filter', file: 'av2/common/ccso.c', line: 249,
         role: 'Classify co-located luma edge (3/2 levels) + band → index a small int8 offset LUT → add to the output plane.' },
       spec: { num: '7.19', title: 'CCSO process' },
+      io: {
+        diagCaption: 'luma classify → LUT → add to chroma',
+        diagram: 'graph TD\n' +
+          '  LUMA["ext_rec_y<br/>padded luma plane (SRAM)"] --> CLS["edge classify<br/>2 taps → src_cls, band"]\n' +
+          '  CLS --> IDX["lut_idx = band·16 + cls"]\n' +
+          '  ROM["offset_buf int8<br/>[3][64×16]"] --> SEL["offset_val"]\n' +
+          '  IDX --> SEL\n' +
+          '  DST["dst plane (cdef out)"] --> ADD["+ offset, clamp"]\n' +
+          '  SEL --> ADD\n' +
+          '  ADD --> OUT["dst&#39; → LR"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  class LUMA mem;\n  class DST mem;\n  class OUT mem;\n  class ROM rom;\n  class CLS op;\n  class IDX op;\n  class SEL op;\n  class ADD op;',
+        in: [
+          { sig: 'dst (cdef out)', type: 'uint16', peer: '← CDEF', vol: 'block', note: 'in-place RMW' },
+          { sig: 'ext_rec_y', type: 'uint16 (padded luma)', peer: 'recon luma SRAM', vol: 'co-located, chroma-aligned', note: '2-tap edge classify — forces luma-before-chroma' },
+          { sig: 'offset_buf', type: 'int8 filter_offset[3][64×16]', peer: 'ROM', vol: '64 band × 16 class × 3 plane', note: 'small LUT' },
+        ],
+        out: [
+          { sig: "dst'", type: 'uint16 (offset added)', peer: '→ LR', vol: 'block', note: 'clamp to bitdepth' },
+        ],
+        note: 'Cheap arithmetic, but the **cross-component read of a padded full-luma plane** is the real HW cost: that plane must be resident in SRAM and luma must be filtered first.',
+      },
       hw: { questions: [
         'Needs a padded full-luma plane (ext_rec_y) in SRAM. Sizing and reuse?',
         'Per-pixel: 2 luma taps + classify + LUT add — cheap, but cross-component ordering forces chroma after luma.',
@@ -222,6 +252,36 @@ window.TOOL = {
       fn: { name: 'gdf_inference_unit', file: 'av2/common/gdf_block.c', line: 585,
         role: '22 inputs (18 sample-diffs + 4 gradients) → alpha-clip → 22×3 integer MACs → bias → normalize → 3D error-LUT.' },
       spec: { num: '7.20.5', title: 'Apply GDF filter process' },
+      io: {
+        diagCaption: 'gather → clip → 66 MAC → LUT activation',
+        diagram: 'graph TD\n' +
+          '  REC["recon luma<br/>+ line buffer (fwd/bwd nbr)"] --> GTH["gather 22 inputs<br/>18 diff + 4 grad"]\n' +
+          '  ALP["alpha ROM<br/>int16"] --> CLP["per-input clip"]\n' +
+          '  GTH --> CLP\n' +
+          '  WT["weight ROM<br/>int16 [QP6][refdst5][4·22·3]"] --> MAC["MAC array<br/>22×3 = 66 int MAC/px"]\n' +
+          '  CLP --> MAC\n' +
+          '  BIA["bias ROM int32"] --> NRM["+bias → GDF_NORM_IDX"]\n' +
+          '  MAC --> NRM\n' +
+          '  ELU["error-LUT int8<br/>3D (intra 16³ / inter 10³)"] --> ACT["LUT activation"]\n' +
+          '  NRM --> ACT\n' +
+          '  ACT --> OUT["err residual<br/>→ compensation (l7)"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+          '  class REC mem;\n  class OUT mem;\n  class ALP rom;\n  class WT rom;\n  class BIA rom;\n  class ELU rom;\n' +
+          '  class GTH op;\n  class CLP op;\n  class NRM op;\n  class ACT op;\n  class MAC hot;',
+        in: [
+          { sig: 'rec nbr (fwd/bwd)', type: 'uint16', peer: 'recon luma + line buffer', vol: '22 inputs/px', note: '18 sample-diff + 4 gradient' },
+          { sig: 'weight', type: 'int16 [QP6][refdst5][4·22·3]', peer: 'weight ROM', vol: 'per (intra/inter,QP,refdst,class)', note: 'learned MAC weights' },
+          { sig: 'alpha / bias', type: 'int16 / int32', peer: 'ROM', vol: 'per class/input', note: 'clip bounds + accum bias' },
+          { sig: 'error_table', type: 'int8 3D (intra 16³ / inter 10³)', peer: 'ROM', vol: 'activation LUT', note: 'replaces arithmetic activation' },
+        ],
+        out: [
+          { sig: 'err residual', type: 'int16', peer: '→ compensation (l7) → rec add', vol: '1 / luma px', note: '66 int MAC/px — the decoder-NPU datapath' },
+        ],
+        note: 'The flagship decoder-NPU block: **weight ROM → integer MAC array → LUT activation**, bit-exact, every luma pixel. Identical shape to DIP / MHCCP / IST — the strongest case for one shared MAC array.',
+      },
       hw: { questions: [
         '66 int MACs/pixel (22×3) — systolic MAC array sizing for luma throughput?',
         'Weight ROM (int16) + 3D error-LUT (int8, intra 16³ / inter 10³) — total storage and read ports?',
@@ -240,6 +300,31 @@ window.TOOL = {
       fn: { name: 'pc_wiener classify + apply', file: 'av2/common/restoration.c', line: 940,
         role: 'Per-pixel 4-feature classify → 4096 LUT → 256 classes → one of 64 learned int16 13-tap filters.' },
       spec: { num: '7.20', title: 'Loop restoration process' },
+      io: {
+        diagCaption: 'classify → select filter → 13-tap conv',
+        diagram: 'graph TD\n' +
+          '  REC["rec pixels<br/>+ line buffer"] --> FEAT["4-feature quantize<br/>Σ thr·feat"]\n' +
+          '  CLUT["class LUT<br/>4096 entries"] --> CLS["256 classes"]\n' +
+          '  FEAT --> CLS\n' +
+          '  BANK["filter bank<br/>int16 64 × 13-tap"] --> SEL["select 13-tap"]\n' +
+          '  CLS --> SEL\n' +
+          '  REC --> CONV["13-tap conv (MAC)"]\n' +
+          '  SEL --> CONV\n' +
+          '  CONV --> OUT["restored → GDF"]\n' +
+          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+          '  class REC mem;\n  class OUT mem;\n  class CLUT rom;\n  class BANK rom;\n  class FEAT op;\n  class CLS op;\n  class SEL op;\n  class CONV op;',
+        in: [
+          { sig: 'rec pixels', type: 'uint16', peer: '← CCSO out + line buffer', vol: '13-tap window/px', note: '4-feature classify input' },
+          { sig: 'class_lut', type: '4096-entry', peer: 'ROM', vol: 'feature → class', note: '4-feature → 256 classes' },
+          { sig: 'filter_bank', type: 'int16 64 × 13-tap', peer: 'ROM', vol: '64 filters', note: 'selected by class' },
+        ],
+        out: [
+          { sig: 'restored', type: 'uint16', peer: '→ GDF', vol: '1 / px', note: '13-tap learned conv' },
+        ],
+        note: 'A second classifier→learned-filter (NPU-adjacent): a 4096-entry class LUT front-end feeding a 64×13-tap filter bank. Pairs with GDF as the two LPF MAC blocks.',
+      },
       hw: { questions: [
         'Another classifier→learned-filter (NPU-adjacent). Feature line buffers + 13-tap conv MACs?',
         '64 filters × 13 taps int16 ROM + 4096-entry class LUT — storage.',
