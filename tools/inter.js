@@ -143,7 +143,7 @@ window.TOOL = {
     openQ: [
       'TIP 추가 MC 패스가 대역폭을 키움 → TIP 프레임을 on-the-fly 생성 vs 프레임버퍼 캐시? 대역폭 vs SRAM.',
       'DMVR(24 SAD)+광류(gradient+LS)가 MC 뒤 직렬 정제 → 정제 유닛을 MC 파이프에 융합 vs 별도 패스?',
-      '광류 LS 솔버(가변 블록)도 디코더 내 최소자승 — MHCCP/DIP 솔버/MAC와 **공용 연산유닛** 가능?',
+      '광류 LS 솔버 = inter 모듈 내 **전용** 소형 최소자승 유닛(MHCCP/CfL과 다른 스테이지라 공유 아님). 가변 블록크기 → 고정 파이프 vs 멀티사이클?',
       '12-tap·확장윈도우로 ref fetch 타일↑ → 프레임버퍼 압축(FBC)·캐시 재사용으로 대역폭 상쇄 전략?',
     ],
   },

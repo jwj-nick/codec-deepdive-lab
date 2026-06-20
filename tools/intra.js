@@ -154,10 +154,10 @@ window.TOOL = {
       '- **추가(⭐NPU 교집합):** DIP 행렬 MAC 어레이 + 가중치 ROM, MHCCP 3×3 솔버(가우스소거+나눗셈+V²), 암시 CfL 최소자승.\n' +
       '- MRL(라인버퍼↑)·IBP(블렌드 경로) 추가.',
     openQ: [
-      '⭐ DIP MAC(64×11)·MHCCP 솔버를 **전용 유닛 vs 디코더 내 작은 MAC 어레이(NPU 닮음) 공유**? IQT의 IST/DDT 행렬과도 공유 가능?',
-      'MHCCP의 per-block 가우스 소거(나눗셈 포함)는 가변 지연 — 고정 파이프로 풀려면 나눗셈 근사/뉴턴? 면적 vs 지연.',
+      '⭐ DIP MAC(64×11)는 **전용 DIP 모듈**(기본 디자인). 설계 포인트 = 그 전용 MAC 어레이를 systolic vs time-mux로 둘지·weight ROM read 대역폭. (IQT의 IST/DDT와는 **다른 스테이지=동시가동→공유 불가.**)',
+      'MHCCP의 per-block 가우스 소거(나눗셈 포함)는 가변 지연 — 전용 소형 LS-솔버를 고정 파이프(나눗셈 근사/뉴턴) vs 멀티사이클 FSM?',
       'recon-feedback 직렬 사슬에서 DIP/MHCCP 지연이 critical → 예측 후보 투기적 계산 vs 블록 순차 고수?',
-      'DIP는 8×8 고정 후 resample — 작은 TX엔 과한 연산. eligible 크기 제한이 HW 활용도에 주는 영향?',
+      'DIP는 8×8 고정 후 resample — 작은 TX엔 과한 연산. eligible 크기 제한이 전용 모듈 활용도에 주는 영향?',
     ],
   },
 

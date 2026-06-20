@@ -1,18 +1,23 @@
-/* tools/npu.js — Decoder-NPU synthesis (cross-stage integer-MAC blocks)
-   실측: ~/work/avm. 각 블록의 file:line·MAC수·ROM·activation은 해당 ⭐챕터에서 검증됨.
-   이 페이지 = Nick의 NPU 학습 spine. 흩어진 정수 MAC/solver 블록을 한 장에 모아
-   "공유 MAC 어레이(decoder-NPU) vs 스테이지별 전용" 아키텍처 질문으로 수렴. 전부 공개. */
+/* tools/npu.js — Integer-MAC modules (dedicated MAC datapaths in the decoder)
+   실측: ~/work/avm. 각 블록 file:line·MAC수·ROM·activation은 해당 ⭐챕터에서 검증.
+   ⚠️ 프레이밍(2026-06-20 정정, Nick): 디코더 = fixed-function streaming 파이프라인.
+   스테이지가 동시 가동 → 스테이지 간 HW 시분할 불가 → **모드별 전용 module이 기본 디자인.**
+   "공유 MAC 어레이/NPU 통합"은 코덱 IP 설계가 아님. NPU 연결 = 각 전용 모듈이 작은 MAC datapath라
+   설계 기법이 전이된다는 것. 전부 공개 (RTL만 private). */
 window.TOOL = {
   id: 'npu',
-  title: 'Decoder-NPU — the integer-MAC blocks hiding in the AV2 decoder',
-  intro: 'The AV2 **decoder** (not encoder) normative path quietly grew a handful of **learned, bit-exact integer ' +
-    'MAC / linear-solver blocks**. They live in different pipeline stages but share **one datapath shape**. ' +
-    'For an NPU-minded HW architect, that shared shape is the whole story.',
-  thesis: '**Thesis:** weight ROM → integer MAC array → bias/normalize → LUT/clip activation. ' +
-    'DIP, GDF, MHCCP, IST, DDT, optical-flow, PC-Wiener all instantiate it. ' +
-    'So the design question is not "build N filters" but **"do they fold into one shared MAC array (a decoder-NPU), or stay per-stage dedicated?"**',
+  title: 'Integer-MAC modules — dedicated MAC datapaths in the decoder',
+  intro: 'The AV2 decoder is a **fixed-function streaming pipeline**: ENT, IQT, PRD and LPF run **concurrently** ' +
+    'on different superblocks/pixels. So hardware **cannot be time-shared across stages** — each mode/tool is a ' +
+    '**dedicated module**. That is the baseline, not a choice. What makes these worth cataloguing: several of those ' +
+    'dedicated modules are **integer MAC / linear-solver datapaths** — exactly where MAC-array / NPU design skill ' +
+    'maps onto codec IP. The design *techniques* transfer; the hardware does **not** merge.',
+  thesis: '**Design principle:** per-mode **dedicated module** is mandatory (the pipeline is concurrent — a shared, ' +
+    'programmable NPU/GPU-style fabric would have to be in many places at once). The payoff of the inventory below is ' +
+    'that each row is a **small fixed-function MAC engine to design well** — weight ROM → MAC array → bias/normalize → ' +
+    'activation. The open work is the **micro-architecture of each dedicated module**, not merging them.',
 
-  // The one shape every block below instantiates (vertical, colored)
+  // The shape each dedicated module instantiates (vertical, colored)
   diagram:
     'graph TD\n' +
     '  IN["inputs<br/>pixels / coeffs / gradients"] --> CLP["clip / quantize<br/>(alpha, feature)"]\n' +
@@ -29,7 +34,7 @@ window.TOOL = {
     '  class IN mem;\n  class OUT mem;\n  class ROM rom;\n  class LUT rom;\n' +
     '  class CLP op;\n  class ACC op;\n  class ACT op;\n  class MAC hot;',
 
-  // Inventory — each maps onto the signature above
+  // Inventory — each is its OWN dedicated module; they share a shape, not silicon
   blocks: [
     { key: 'DIP', stage: 'PRD · intra', tool: 'intra', ch: 'n3',
       mac: '**704** int MAC / 8×8', weights: 'uint16[6][64][11]', act: '>>12, −sum, clip',
@@ -59,15 +64,16 @@ window.TOOL = {
       mac: '2×2 rotate, 4 mul/coeff', weights: 'cctx_mtx[7][2]', act: '—',
       pipe: 'after dequant, U/V join' },
   ],
-  invNote: 'All **integer, bit-exact** — not float NN inference, but structurally a weight-ROM + MAC + activation datapath. ' +
-    'ENT is deliberately absent: it is the serial-bottleneck engine, not a MAC block. Click a block to open its chapter.',
+  invNote: 'All **integer, bit-exact** — not float NN inference. Each is a **dedicated module** sized for its own ' +
+    'worst-case throughput. They are active concurrently (different stages, different data) → **no cross-stage sharing**. ' +
+    'The shared *shape* is why the design know-how carries across. Click a block to open its chapter.',
 
   questions: [
-    'Utilization: DIP fires only on intra 8×8, GDF on every luma pixel, optical-flow only on refined inter blocks. A **shared array** must time-multiplex very different duty cycles — does one array stay busy, or does it starve/stall per frame type?',
-    'Precision: DIP weights uint16, GDF int16, CCTX 8-bit rotate, MHCCP fixed-point solve. One array width (worst-case) vs reconfigurable lanes — area vs flexibility?',
-    'Activation: GDF/PC-Wiener use **LUTs** (int8 error-table, 4096 class table); DIP uses shift+clip. Is a shared LUT-activation block worth it, or keep activations per-block?',
-    'Dataflow distance: these blocks sit in 4 different stages (IQT, intra-PRD, inter-PRD, LPF) with line buffers between them. Routing operands to one central array = wiring/bandwidth cost. Does locality kill the shared-array idea?',
-    'The solvers (MHCCP, optical-flow, CfL) need **divide / Gaussian elimination** — not plain MAC. Do they share the MAC array at all, or do they need a separate small linear-solver unit?',
-    'If you DID build one shared decoder-NPU array: what is its size (MACs), and which block sets the worst-case throughput requirement (GDF per-pixel luma is the obvious suspect)?',
+    'Why dedicated, restated as the constraint: ENT, IQT, PRD, LPF are all busy on different SBs in the same cycle. Convince yourself a single compute block **cannot** serve two stages — what would it have to be in two places at once?',
+    'GDF runs on **every luma pixel** (66 MAC/px). For real-time decode at your target resolution/fps, size GDF\'s **own** MAC array: required MAC/clk → systolic array vs time-multiplexed MACs inside the GDF module?',
+    'DIP: 704 MAC per 8×8 from uint16[6][64][11]. Weight-ROM read bandwidth and operand reuse inside the **dedicated DIP module** — how do you keep the array fed?',
+    'Within ONE stage, sequential ops *may* share: IST and DDT are both matmuls in the IQT transform path of the same block. Can one matmul engine inside the IQT module serve both, or does the 1D-transform schedule force two? (intra-module reuse — the legitimate version of "sharing.")',
+    'The solvers (MHCCP, optical-flow, CfL) need **divide / Gaussian elimination**, not plain MAC. Each is a tiny dedicated linear-solver — fixed pipe via reciprocal approximation, or a multi-cycle FSM?',
+    'Per-module micro-architecture is the real choice: for each block, which fits — systolic, SIMD lanes, or a time-multiplexed MAC — given its duty cycle (GDF every pixel vs DIP intra-8×8-only) and latency budget in the pipe?',
   ],
 };

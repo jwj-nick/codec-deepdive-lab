@@ -166,9 +166,9 @@ window.TOOL = {
       '- **확대:** dequant·계수 int16→**int32**(곱셈/버퍼 폭).\n' +
       '- 1차 버터플라이 코어와 16 primary TX_TYPE은 **재사용 가능**.',
     openQ: [
-      'IST·DDT 둘 다 행렬곱 → **하나의 MAC 어레이(NPU 닮음)로 공유** vs 버터플라이+전용커널 분리? 면적 vs 유연성.',
+      'IST·DDT 둘 다 행렬곱이고 **같은 IQT 모듈 안에서 한 블록 변환 중 순차** 발생 → IQT 모듈 내부 matmul 엔진 1개로 둘을 서비스 가능? (스테이지 간 공유가 아니라 **모듈 내 reuse** — 정당한 형태.)',
       'CCTX가 U/V 동시처리를 강제 → 색차 plane을 묶어 스케줄 vs dequant↔색차tx 사이 작은 회전유닛 삽입?',
-      'DDT 학습행렬은 고정 ROM — 전 크기/세트 ROM 용량은? 전용커널 vs 범용 matmul 트레이드.',
+      'DDT 학습행렬은 고정 ROM — 전 크기/세트 ROM 용량은? 전용 matmul 엔진의 PE 수/throughput 사이징.',
       'TCQ dequant 2-pass를 ENT에 흡수 vs IQT에서 파싱된 상태 읽어 별도 dequant 패스? (ENT 챕터의 경계 질문과 짝.)',
     ],
   },

@@ -148,7 +148,7 @@ window.TOOL = {
       '- LR: 분리Wiener+SGR → **PC-Wiener(분류기+학습필터)·비분리 Wiener**.\n' +
       '- 패스 수 3→5 → 라인버퍼·대역폭·직렬 깊이 증가.',
     openQ: [
-      '⭐ GDF(66 MAC/px)·PC-Wiener(분류+13tap)·IST/DDT(IQT)·DIP/MHCCP(intra) 모두 정수 MAC → **공용 MAC 어레이(decoder NPU)로 통합** vs 스테이지별 전용? Nick 해자 영역.',
+      '⭐ GDF(66 MAC/px)·PC-Wiener(분류+13tap)는 **각자 전용 LPF 모듈**(IQT·intra의 MAC와 동시가동→스테이지 간 공유 불가). 핵심 = GDF가 전 luma 픽셀이라 **worst-case throughput을 정의** → 전용 MAC 어레이 사이징(MAC/clk, systolic vs time-mux). Nick 해자 영역.',
       'GDF는 LR 뒤 별도 full-frame 패스 → LR과 융합(fuse)해 라인버퍼/대역폭 절감 가능? spec은 LR 하위로 묶음.',
       '5 순차 패스의 라인버퍼 총량 예산 — 패스 융합/타일 파이프라이닝으로 어디까지 줄일까?',
       'GDF error-LUT(3D, int8)는 ROM 조회 = activation 대체. LUT vs 산술 activation의 면적/지연 트레이드.',
