@@ -240,11 +240,17 @@ window.TOOL = {
       fn: { name: 'avm_od_ec_dec_init', file: 'avm_dsp/entdec.c', line: 75,
         role: 'Initialize the arithmetic decoder: range = 0x8000, cnt = -15, first window refill.' },
       spec: { num: '8.2.2', title: 'Initialization process for symbol decoder' },
-      hw: { questions: [
-        'How many bytes load into the 64-bit window at reset? Byte-aligned vs bit-level refill datapath?',
-        'rng = 0x8000, cnt = -15 — what invariant do these set up for the first decode (range >= 32768)?',
-        'Refill engine: interaction with the bitstream pointer and tile boundary?',
-      ], derived: null } },
+      qna: [
+        { tag: 'verified', ref: 'entdec.c:75',
+          q: 'What state does init set, and why those exact values?',
+          a: '`rng = 0x8000` (32768, MSB set) = **full-scale range** — it plants the precision invariant (ch.3) from cycle 0. `cnt = -15` — the valid-bit counter starts negative so the first `od_ec_dec_refill` brings it positive. `dif = 2^63 − 1` = the code window pre-fill (all ones below the MSB). `bptr / end` = bitstream bounds. Then `od_ec_dec_refill(dec)` loads the first bytes.' },
+        { tag: 'common',
+          q: 'AV1 vs AV2 here?',
+          a: 'Identical to AV1 `od_ec_dec_init` — the arithmetic engine is byte-reused (ch.2). Only the `avm_` prefix differs.' },
+        { tag: 'hw',
+          q: 'What does reset cost in HW?',
+          a: 'A constant load of `{dif, rng=0x8000, cnt=−15}` + one window refill (byte-aligned burst from the tile buffer). It is **per-tile**, so the cost amortizes over the whole tile; the refill datapath is the same barrel-shifter / refill used by renormalize (ch.3).' },
+      ] },
     {
       id: 'e2', n: 2, title: 'Multi-symbol decode core', stage: 'full',
       fn: { name: 'avm_od_ec_decode_cdf_q15_c', file: 'avm_dsp/entdec.c', line: 192,
@@ -440,20 +446,38 @@ window.TOOL = {
       fn: { name: 'av2_read_coeffs_txb_facade', file: 'av2/decoder/decodetxb.c', line: 979,
         role: 'Enter coefficient decode for one TX block: build TXB_CTX, read txb_skip/tx_type, dispatch FSC vs normal.' },
       spec: { num: '5.20.6', title: 'Transform and quantization structures' },
-      hw: { questions: [
-        'TXB_CTX setup per block — how much derived state, computed once per TX block?',
-        'FSC vs normal dispatch — control overhead and divergent datapaths.',
-        'Pipeline fill cost entering the per-coefficient serial loop for each block.',
-      ], derived: null } },
+      qna: [
+        { tag: 'verified', ref: 'decodetxb.c:437',
+          q: 'How does a TX block decode start?',
+          a: 'Read **`txb_skip` (all_zero)** from `txb_skip_cdf[pred_mode_ctx][txs_ctx][txb_skip_ctx]` (binary). If `all_zero`, the block has no coefficients → skip entirely (`tx_skip` set). Context comes from neighbor skip/eob state. This is the cheap early-out that keeps empty blocks off the serial coeff loop.' },
+        { tag: 'delta', ref: 'decodetxb.c:442',
+          q: 'What is FSC, and how is it dispatched?',
+          a: '**FSC = Forward Skip Coding** (`mbmi->fsc_mode`) — a coeff path for **IDTX (identity transform)** blocks that reads coefficients in **forward scan** (low→high) with dedicated CDFs (`coeff_base_cdf_idtx`, `read_coeffs_forward_2d`), vs the normal **reverse-scan** path. `pred_mode_ctx = (is_inter || fsc_mode) ? 1 : 0` feeds the skip context.' },
+        { tag: 'delta', ref: 'decodetxb.c:447',
+          q: 'Cross-component context at entry?',
+          a: 'For the **V plane**, `txb_skip` uses `v_txb_skip_cdf` with a context offset by `eob_u_flag` (whether U had coefficients, set at :462) — V skip probability is conditioned on U. A small chroma cross-component coupling.' },
+        { tag: 'hw',
+          q: 'HW cost of block entry?',
+          a: 'Per TX block: build `TXB_CTX` once (neighbor-derived), one binary `txb_skip` symbol, then a **divergent dispatch** — FSC-forward vs normal-reverse, two control paths sharing one `od_ec` engine. Pipeline-fill into the per-coeff serial loop happens once per non-skipped block.' },
+      ] },
     { id: 'e7', n: 7, title: 'EOB decode', stage: 'skeleton',
       fn: { name: 'decode_eob', file: 'av2/decoder/decodetxb.c', line: 300,
         role: 'Decode the end-of-block position token (eob_flag_cdf16..1024 by TX size), then extra bits.' },
       spec: { num: '5.20.6', title: 'Transform and quantization structures' },
-      hw: { questions: [
-        'eob_flag_cdf{16..1024} banked by TX size — ROM/SRAM layout for the EOB CDF tables?',
-        'EOB position then extra + literal — branch/sequence structure.',
-        'EOB sets the downstream coeff-loop length → scheduling / early-termination.',
-      ], derived: null } },
+      qna: [
+        { tag: 'verified', ref: 'decodetxb.c:300',
+          q: 'How is the EOB position decoded?',
+          a: 'Two parts: a **group token** `eob_pt` via a multi-symbol CDF, then **`eob_extra` refinement bits**. Reconstruct: `eob = av2_eob_group_start[eob_token]; if (eob > 2) eob += extra;` (`rec_eob_pos` :135). Same group + extra structure as AV1.' },
+        { tag: 'verified', ref: 'decodetxb.c:327',
+          q: 'Why banked eob_flag_cdf16…1024?',
+          a: '`eob_multi_size = txsize_log2_minus4[tx_size]` selects `eob_flag_cdf16 / 32 / 64 / … / 1024` — **one bank per coefficient count**. Bigger TX ⇒ more possible EOB positions ⇒ larger token alphabet ⇒ a wider CDF bank.' },
+        { tag: 'delta',
+          q: 'AV2 addition vs AV1?',
+          a: 'A **`bob` (begin-of-block)** is decoded alongside `eob` for the forward / FSC path (ch.6) — AV1 has only `eob`. The `eob_pt + extra` mechanism itself is AV1-like.' },
+        { tag: 'hw',
+          q: 'What does EOB set up downstream?',
+          a: 'EOB = the **loop length** of the per-coefficient serial scan (ch.8) ⇒ it drives scheduling and enables early termination. The banks are ROM/SRAM **addressed by TX size + plane context** (`get_eob_plane_ctx`). Decode EOB first, then run exactly `eob` iterations.' },
+      ] },
     { id: 'e8', n: 8, title: 'Base + low-range reverse scan', stage: 'skeleton',
       fn: { name: 'read_coeffs_reverse_2d', file: 'av2/decoder/decodetxb.c', line: 162,
         role: 'Reverse-scan base level + low-range per position; advances the TCQ state each coefficient.' },
@@ -529,14 +553,40 @@ window.TOOL = {
         '**HW:** rare + bypass + a tiny running-avg register + threshold LUT; a small Rice/Golomb decoder sharing the bypass shifter.' } },
     { id: 'e11', n: 11, title: 'HW synthesis (ENT stage) — capstone', stage: 'skeleton',
       fn: { name: '(whole stage)',
-        role: '⏭ **Next up.** Synthesize everything derived (E2–E10 + parity-hiding): the symbols/clk ceiling, total CDF SRAM, the only scaling axis. Yours to derive.' },
+        role: 'Synthesis of E2–E10 + parity-hiding: the symbols/clk ceiling, the only scaling axis, total CDF SRAM, what offloads the serial path.' },
       spec: { num: '8.2–8.3 · 5.20.6', title: 'Entropy decode — stage synthesis' },
-      hw: { questions: [
-        '**▶ The next question:** write the serial sum that sets the **symbols/clk ceiling** — chain 1 (boundary search + multiply + narrow + renormalize) + chain 2 (CDF read-update-writeback, same context) + TCQ state update. Which term dominates?',
-        '**Only scaling axis:** inside a tile everything is serial (carried `od_ec` + TCQ state). So what is the *only* way to raise total Mpix/s? (hint from E2: where is the one independent boundary?)',
-        '**Total CDF SRAM budget:** `coeff_base` [×`TCQ_CTXS=2`] + `base_lf` + `br` + parity-hiding (`coeff_base_ph`) + EOB banks (`eob_flag_cdf16…1024`) + all mode CDFs. Rough sizing?',
-        '**bypass / 4-part / sign are CDF-free** (no RMW) — how much do they offload the serial CDF path, and can they decode multi-bit/clk in parallel?',
-        '**Where can you pipeline** *without* breaking the carried `od_ec_dec` + TCQ state? (context class 1 precompute from E5 is the one safe spot.)',
-      ], derived: null } },
+      figures: [
+        { title: 'ENT throughput model — one serial chain, scale by tiles',
+          mermaid:
+'graph TD\n' +
+'  S["od_ec state<br/>{dif, rng, cnt}"] --> SY["decode 1 symbol"]\n' +
+'  CDF["CDF RMW<br/>(same context)"] --> SY\n' +
+'  SY --> TCQ["TCQ state update<br/>(coeff path)"]\n' +
+'  TCQ --> S\n' +
+'  SY --> NXT["next symbol<br/>(serial, ~1 / clk)"]\n' +
+'  NXT --> SCALE["raise Mpix/s only by<br/>#tiles × #entropy instances"]\n' +
+'  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
+'  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+'  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+'  class S hot;\n  class TCQ hot;\n  class CDF mem;\n  class SY op;\n  class NXT op;\n  class SCALE op;',
+          caption: 'Everything inside a tile is one carried-state serial chain; only tiles are independent.' },
+      ],
+      qna: [
+        { tag: 'hw',
+          q: 'What serial sum sets the symbols/clk ceiling?',
+          a: 'Per symbol: **chain 1** = inverse-CDF boundary search (≤16 iters, each a multiply `rr·pp`) + narrow + renormalize (LZ-count + barrel shift); **chain 2** = CDF read + `update_cdf` + writeback (only on a same-context run); + **TCQ** state LUT. The boundary-search multiply loop and renormalize dominate, and the **dual RMW** (od_ec state + CDF) must both close in one symbol period ⇒ ≈ **1 symbol/clk** best case.' },
+        { tag: 'hw',
+          q: 'The only way to raise total Mpix/s?',
+          a: '**Tile-level parallelism.** Inside a tile everything is serial (carried `od_ec` + TCQ + same-context CDF). Tiles are independent — each its own `avm_reader` + `tctx` copy — so throughput scales with **#tiles × #entropy instances**; nothing inside a block parallelizes. (The one independent boundary from ch.2 / ch.5.)' },
+        { tag: 'delta',
+          q: 'Total CDF SRAM budget — what grew in AV2?',
+          a: 'Coeff CDFs: `coeff_base[…][TCQ_CTXS=2]` (≈2× vs AV1) + `coeff_base_lf` + `coeff_br` + **parity-hiding** `coeff_base_ph` (new) + **EOB banks** `eob_flag_cdf16…1024` + all mode/partition CDFs. The `[TCQ_CTXS]` dimension and the PH table are the AV2 adders; the per-tile `tctx` copy multiplies by the number of tile-parallel instances.' },
+        { tag: 'hw',
+          q: 'How much do bypass / sign offload the serial path?',
+          a: 'bypass / 4-part / sign are **CDF-free** (equiprobable) ⇒ no RMW, no adaptation ⇒ a **multi-bit shifter** can consume several bits/clock in parallel. They take the high-range suffix and signs **off** the serial CDF loop (pass 2), which is exactly why the coeff path defers them. The serial bottleneck is the CDF-coded base/low-range, not the bypass tail.' },
+        { tag: 'hw',
+          q: 'Where can you safely pipeline?',
+          a: 'Only **context-class-1 precompute** (ch.5): neighbor-block / position / plane context (and the CDF address) can be derived ahead of the serial engine, because it depends on already-decoded neighbors — not on the just-decoded symbol. Anything carrying `od_ec_dec` state or TCQ state cannot be pipelined across symbols.' },
+      ] },
   ],
 };

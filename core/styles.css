@@ -254,6 +254,30 @@ th{background:var(--panel2);color:var(--mut);font-weight:600}
 .ascii-fig .ascii{margin:0;padding:10px;background:#0b0f14;border:1px solid var(--line);border-radius:6px;
   overflow:auto;font:.8rem/1.4 var(--mono);color:var(--acc2);white-space:pre}
 
+/* ── Q&A · derived (rich color-coded cards) ── */
+.qna-list{display:grid;gap:12px;margin-top:10px}
+.qna{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--line);
+  border-radius:10px;padding:11px 14px}
+.qna-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px}
+.qna-q{display:inline-grid;place-items:center;min-width:1.7em;height:1.5em;padding:0 .4em;border-radius:5px;
+  background:var(--acc);color:#06121f;font:700 .74rem var(--mono)}
+.qna-tag{font:600 .67rem var(--mono);letter-spacing:.03em;padding:2px 8px;border-radius:20px;
+  border:1px solid var(--line);color:var(--mut)}
+.qna-question{font-weight:600;font-size:.97rem;color:var(--fg);line-height:1.5}
+.qna-answer{display:flex;gap:9px;margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
+.qna-a{flex:0 0 auto;display:inline-grid;place-items:center;width:1.5em;height:1.5em;border-radius:5px;
+  background:var(--good);color:#06121f;font:700 .74rem var(--mono)}
+.qna-a-body{font-size:.92rem;color:var(--mut);min-width:0;overflow-x:auto}
+.qna-a-body p{margin:.3em 0}
+.qna-a-body p:first-child{margin-top:0}
+.qna-a-body code{color:var(--acc2)}
+.qna-a-body table{font-size:.86rem;display:block;overflow-x:auto}
+.qna-common{border-left-color:var(--acc)}    .qna-common .qna-tag{color:var(--acc);border-color:#234a63}
+.qna-delta{border-left-color:var(--ent)}     .qna-delta .qna-tag{color:var(--ent);border-color:#5a3a26}
+.qna-hw{border-left-color:var(--good)}        .qna-hw .qna-tag{color:var(--good);border-color:#24503a}
+.qna-verified{border-left-color:var(--warn)} .qna-verified .qna-tag{color:var(--warn);border-color:#5a4a1f}
+.qna-insight{border-left-color:var(--mip)}   .qna-insight .qna-tag{color:var(--mip);border-color:#42325a}
+
 /* ── I/O port table (RTL draft) ── */
 .io-table{font-size:.84rem;display:block;overflow-x:auto}
 .io-table th{background:var(--panel2);color:var(--mut);font-family:var(--mono);font-size:.72rem;letter-spacing:.03em;white-space:nowrap}

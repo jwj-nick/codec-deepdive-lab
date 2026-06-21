@@ -31,12 +31,12 @@ window.Render = (function () {
       return;
     }
     document.title = ch.title + ' — ' + T.title;
-    const hasDerived = ch.hw && ch.hw.derived;
+    const hasDerived = (ch.hw && ch.hw.derived) || (ch.qna && ch.qna.length);
     const skel = ch.stage === 'full' ? ''
       : hasDerived
-        ? '<div class="skel-banner ok">📝 <b>HW derivation captured</b> (Socratic session notes in the HW section). Line-by-line code walkthrough still pending.</div>'
+        ? '<div class="skel-banner ok">📝 <b>Derived notes captured</b> (Socratic Q&A below). Line-by-line code walkthrough still pending.</div>'
         : '<div class="skel-banner">🚧 <b>Skeleton</b> — line-by-line walkthrough pending. Fill while studying via <code>codec-study ' + esc(ch.id) + '</code>.</div>';
-    root.innerHTML = chHeader(T, ch) + skel + chSpec(ch) + chFigures(ch) + chWalk(ch) + chStructs(ch) + chIO(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
+    root.innerHTML = chHeader(T, ch) + skel + chSpec(ch) + chFigures(ch) + chQnA(ch) + chWalk(ch) + chStructs(ch) + chIO(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
     postRender();
   }
 
@@ -116,7 +116,7 @@ window.Render = (function () {
   function secChapters(T) {
     if (!T.chapters || !T.chapters.length) return '';
     const items = T.chapters.map(c => {
-      const hasDerived = c.hw && c.hw.derived;
+      const hasDerived = (c.hw && c.hw.derived) || (c.qna && c.qna.length);
       const st = c.stage === 'full' ? 'walkthrough →' : hasDerived ? '📝 notes →' : 'open Q →';
       const stCls = c.stage === 'full' ? ' full' : hasDerived ? ' derived' : '';
       const inner = '<span class="ch-n">' + esc(c.n) + '</span>' +
@@ -162,6 +162,30 @@ window.Render = (function () {
       return '';
     }).join('');
     return sectionWrap('ch-fig', 'Figures · intuition', body);
+  }
+  // Rich color-coded Q&A cards (derived, categorized)
+  var QNA_TAGS = {
+    common:   { icon: '🔵', label: 'AV1 common' },
+    delta:    { icon: '🟠', label: 'AV2 delta' },
+    hw:       { icon: '🟢', label: 'HW' },
+    verified: { icon: '🟡', label: 'verified' },
+    insight:  { icon: '💜', label: 'insight' },
+  };
+  function chQnA(ch) {
+    if (!ch.qna || !ch.qna.length) return '';
+    const cards = ch.qna.map((it, i) => {
+      const t = QNA_TAGS[it.tag] || { icon: '•', label: it.tag || '' };
+      const ref = it.ref ? '<span class="cb-loc">' + esc(it.ref) + '</span>' : '';
+      return '<div class="qna qna-' + esc(it.tag || 'common') + '">' +
+        '<div class="qna-top"><span class="qna-q">Q' + (i + 1) + '</span>' +
+        '<span class="qna-tag">' + t.icon + ' ' + esc(t.label) + '</span>' + ref + '</div>' +
+        '<div class="qna-question">' + inl(it.q) + '</div>' +
+        '<div class="qna-answer"><span class="qna-a">A</span><div class="qna-a-body">' + md(it.a) + '</div></div>' +
+        '</div>';
+    }).join('');
+    return sectionWrap('ch-qna', 'Q&A · derived',
+      '<p class="muted">Color = category: <b style="color:var(--acc)">🔵 AV1 common</b> · <b style="color:var(--ent)">🟠 AV2 delta</b> · <b style="color:var(--good)">🟢 HW</b> · <b style="color:var(--warn)">🟡 verified (file:line)</b>.</p>' +
+      '<div class="qna-list">' + cards + '</div>');
   }
   function chWalk(ch) {
     if (!ch.walkthrough || !ch.walkthrough.length) return '';
