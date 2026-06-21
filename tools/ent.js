@@ -373,23 +373,18 @@ window.TOOL = {
           '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
           '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
           '  class ICDF mem;\n  class PARA rom;\n  class PS op;\n  class RNG op;\n  class NRM op;\n  class CMP hot;',
-        questions: [
-          'The do-while is a **data-dependent loop** (≤ nsyms = 16). 16-way parallel compare for a fixed 1-cycle vs sequential iteration — area vs frequency trade?',
-          'The multiply `rr*pp` in `od_ec_prob_scale` sits inside the loop. Multiply per iteration vs precompute all boundaries? Where can you pipeline?',
-          '`av2_prob_inc_tbl` (per iteration) + `icdf` (CDF SRAM) — how many ROM/SRAM **read ports** per iteration? And for a 16-way unroll?',
-          'normalize = leading-zero count + variable shift + conditional refill. Separate pipe stage? How do you hide the variable refill (bitstream read) latency?',
-          'This function = **one symbol per call**. What serial sum sets the throughput ceiling (symbols/cycle)? (boundary search + multiply + normalize)',
-          'The next call depends on the updated `dec->{dif,rng,cnt}` → calls are serial. Can pipelining hide this dependency, or is it the fundamental bottleneck?',
-        ],
-        derived:
-          '**Two serial chains (derived, session 260621).**\n\n' +
-          'The next symbol reads the *just-written* state: `c = dif>>48` and `v = prob_scale(icdf, rng)`. Both come out of the previous symbol narrow + renormalize, so **operand n+1 is produced by step n** — no lookahead (speculation = fork all ≤16 symbols, exponential). This sets the ~1 symbol/clk ceiling.\n\n' +
-          '| | chain 1 — engine (here) | chain 2 — CDF (ch.4) |\n' +
-          '|---|---|---|\n' +
-          '| state | `dif` + `rng` (`cnt` = refill bookkeeping) | `update_cdf` adaptation |\n' +
-          '| hazard | **RAW every symbol** (one shared state) | RAW **only on same context** |\n\n' +
-          '**RMW vs RAW** — RMW = one op reads→modifies→writes a location; RAW = the *next* op must read what the *previous* op wrote. Chain 1 has one shared state → unavoidable RAW each symbol; chain 2 has many CDFs → RAW only on a same-context run.',
       },
+      qna: [
+        { tag: 'common', ref: 'entdec.c:192',
+          q: 'AV1 vs AV2 — what is the same, what changed?',
+          a: 'The multi-symbol decode loop is **byte-identical to AV1** `od_ec`. The only AV2 nuance = `av2_prob_inc_tbl` (a trained probability increment) inside `od_ec_prob_scale`. Engine reused; modelling refined.' },
+        { tag: 'hw',
+          q: 'Why is this the throughput bottleneck (chain 1)?',
+          a: 'The next symbol reads the *just-written* state: `c = dif>>48`, `v = prob_scale(icdf, rng)` — both produced by the previous symbol narrow + renormalize ⇒ **operand n+1 is produced by step n** ⇒ no lookahead (speculation = fork ≤16 symbols, exponential) ⇒ ≈ **1 symbol/clk**.' },
+        { tag: 'hw',
+          q: 'RMW vs RAW — and where is the second chain?',
+          a: '**RMW** = one op reads→modifies→writes a location; **RAW** = the next op must read what the previous wrote. Chain 1 = one shared `{dif,rng,cnt}` ⇒ RAW **every** symbol (unavoidable). Chain 2 = `update_cdf` (ch.4) ⇒ RAW **only on a same-context run**.' },
+      ],
       checks: [
         { q: 'Why is `icdf` an "inverse" CDF, and why does that make the `c < v` test natural?',
           a: 'Stored value = `CDF_PROB_TOP - cumulative`, so the value shrinks as the symbol index grows. Walking `v` from the high boundary downward while `c < v`, the `ret` where it stops (`c >= v`) is the interval `c` belongs to.',
@@ -406,42 +401,38 @@ window.TOOL = {
       fn: { name: 'od_ec_dec_normalize', file: 'avm_dsp/entdec.h', line: 140,
         role: 'After each symbol: shift range back to >= 32768, consume d bits from the window, refill if low.' },
       spec: { num: '8.2.6', title: 'Symbol decoding process (renorm)' },
-      hw: { questions: [
-        'Leading-zero count OD_ILOG_NZ(rng) → variable left-shift. Cost of a fixed LZ-count + barrel shifter?',
-        'cnt < OD_EC_MIN_BITS → refill is a data-dependent branch. How to hide refill latency in the pipe?',
-        '64-bit window consumes d bits/symbol. Refill bandwidth vs symbol rate — where is the bottleneck?',
-      ], derived:
-        '**Why renormalize keeps `rng ≥ 32768` = precision (derived 260621).**\n\n' +
-        '`od_ec_prob_scale` uses `rr = rng >> 8` for the boundary multiply. Full-scale `rng` ⇒ `rr ∈ [128,255]` = 8 significant bits ⇒ the 16 symbol boundaries stay separable. If `rng < 256` ⇒ `rr = 0` ⇒ every `v = 0` ⇒ sub-intervals collapse to zero width ⇒ decode breaks + enc/dec mismatch.\n\n' +
-        '**Dual role of the same shift:** `d = 16 − ilog(rng)` restores precision *and* consumes `d` bits from the `dif` window ⇒ bitstream advance (+ refill when `cnt` is low). One op = precision restore + bit consumption.\n\n' +
-        '**HW:** `d` = leading-zero count → variable barrel shift; refill = data-dependent branch (the tail of chain 1).' } },
+      qna: [
+        { tag: 'verified', ref: 'prob.h · entdec.h',
+          q: 'Why must renormalize keep rng ≥ 32768?',
+          a: '`od_ec_prob_scale` uses `rr = rng >> 8`. Full-scale `rng` ⇒ `rr ∈ [128,255]` = 8 significant bits ⇒ 16 boundaries stay separable. If `rng < 256` ⇒ `rr = 0` ⇒ every `v = 0` ⇒ sub-intervals collapse ⇒ decode breaks + enc/dec mismatch. **The invariant = precision.**' },
+        { tag: 'hw',
+          q: 'What is the dual role of the renorm shift?',
+          a: '`d = 16 − ilog(rng)` restores precision **and** consumes `d` bits from the `dif` window ⇒ bitstream advance (+ refill when `cnt` low). One op = precision restore + bit consumption. HW = leading-zero count → variable barrel shift; refill = data-dependent branch (tail of chain 1).' },
+      ] },
     { id: 'e4', n: 4, title: 'Symbol read & CDF update', stage: 'skeleton',
       fn: { name: 'avm_read_symbol / update_cdf', file: 'avm_dsp/bitreader.h', line: 61,
         role: 'Wrapper: decode via od_ec, then adapt the active CDF (update_cdf) when allow_update_cdf.' },
       spec: { num: '8.3', title: 'Parsing process for CDF encoded syntax elements' },
-      hw: { questions: [
-        'update_cdf is a read-modify-write on the active CDF every symbol. Single-cycle RMW SRAM/regfile feasible?',
-        'allow_update_cdf gate — does HW always pay the update, or skip for static CDFs?',
-        'CDFs are uint16 arrays in per-tile FRAME_CONTEXT — which subset is hot, and where does it live (SRAM vs registers)?',
-      ], derived:
-        '**update_cdf = an online learner (derived 260621).**\n\n' +
-        '**(a) Direction:** the decoded symbol probability is **raised**, via exponential decay toward the observed symbol — each entry `delta = (target − cdf[i]) >> rate`. `rate` grows with a per-CDF count ⇒ fast early, slow later = **learning-rate decay**. Effectively a 1-tap EMA (same shape as an adaptive optimizer in DL).\n\n' +
-        '**(b) Cost:** it is a **read-modify-write** on the CDF every symbol. If the next symbol reuses the **same context**, its CDF read waits for this write = **RAW**. Combined with chain 1, each symbol closes two serial RMW loops:\n\n' +
-        '`critical path = (narrow + renorm)  ∥  (CDF read + update + writeback)`\n\n' +
-        'Different context ⇒ independent ⇒ pipelineable; worst case = a run on one context. Keep hot CDFs in single-cycle-RMW SRAM/registers.' } },
+      qna: [
+        { tag: 'verified',
+          q: 'Which way does update_cdf move, and how?',
+          a: 'The decoded symbol probability is **raised**, by **exponential decay toward the observed symbol**: `delta = (target − cdf[i]) >> rate`. `rate` grows with a per-CDF count ⇒ fast early, slow later = **learning-rate decay**. Effectively a 1-tap EMA — an online learner (same shape as a DL adaptive optimizer).' },
+        { tag: 'hw',
+          q: 'Why is it a cost, and how does it combine with chain 1?',
+          a: 'It is a **RMW on the CDF every symbol**. Same-context next symbol ⇒ RAW. Combined: `critical path = (narrow+renorm) ∥ (CDF read+update+writeback)` — two serial RMW loops per symbol. Different context ⇒ independent ⇒ pipelineable. Keep hot CDFs in single-cycle-RMW SRAM/registers.' },
+      ] },
     { id: 'e5', n: 5, title: 'CDF selection & context', stage: 'skeleton',
       fn: { name: 'cdf selection (context derivation)',
         role: 'Derive the context index (neighbors / position / plane) and pick the CDF to decode with.' },
       spec: { num: '8.3.2', title: 'Cdf selection process' },
-      hw: { questions: [
-        'Context index from above/left neighbors → combinational logic depth before the CDF address is ready.',
-        'Neighbor context = line-buffer reads. Above-context width = frame width; sizing?',
-        'Can the context (and CDF address) be precomputed/pipelined ahead of the serial symbol decode?',
-      ], derived:
-        '**Context splits into two classes (derived 260621).**\n\n' +
-        '1. **Neighbor-block / position / plane** (mode, partition): depends on already-decoded *neighbor blocks* (known far ahead) ⇒ **precompute / pipeline ahead** of the serial engine — the one place latency *can* be hidden.\n' +
-        '2. **Intra-block coefficient** context: depends on the *levels of just-decoded coefficients in the same TX block* (`get_lower_levels_ctx_2d(levels,…)`) ⇒ sits on the serial chain, **not** precomputable.\n\n' +
-        '**TCQ pushes class 2 further:** the CDF *selection* itself rides the running quant state — `base_cdf[coeff_ctx][q_i]`, `q_i = tcq_quant(state)` — so context + CDF-select fold into the per-coefficient serial loop. That is where the hideable boundary breaks (→ chapter 9).' } },
+      qna: [
+        { tag: 'hw',
+          q: 'Which context can be precomputed, which cannot?',
+          a: '**Class 1** (neighbor-block / position / plane — mode, partition): depends on already-decoded *neighbors* ⇒ **precompute ahead** of the serial engine — the one hideable latency. **Class 2** (intra-block coeff context, `get_lower_levels_ctx_2d(levels,…)`): depends on *just-decoded* coeffs ⇒ on the serial chain, **not** precomputable.' },
+        { tag: 'delta',
+          q: 'How does TCQ make class 2 worse?',
+          a: 'TCQ makes the CDF **selection** itself ride the running state — `base_cdf[coeff_ctx][q_i]`, `q_i = tcq_quant(state)` ⇒ context + CDF-select fold into the per-coeff serial loop. That is exactly where the hideable boundary breaks (→ ch.9).' },
+      ] },
     { id: 'e6', n: 6, title: 'Coefficient block entry', stage: 'skeleton',
       fn: { name: 'av2_read_coeffs_txb_facade', file: 'av2/decoder/decodetxb.c', line: 979,
         role: 'Enter coefficient decode for one TX block: build TXB_CTX, read txb_skip/tx_type, dispatch FSC vs normal.' },
@@ -482,23 +473,20 @@ window.TOOL = {
       fn: { name: 'read_coeffs_reverse_2d', file: 'av2/decoder/decodetxb.c', line: 162,
         role: 'Reverse-scan base level + low-range per position; advances the TCQ state each coefficient.' },
       spec: { num: '5.20.6', title: 'Transform and quantization structures' },
-      hw: { questions: [
-        'Reverse scan order — position generator (scan LUT vs computed addresses)?',
-        'Each position: base + low-range CDF reads + tcq_next_state update = per-coeff carried state.',
-        'Level scratch buffer levels[] for context — local SRAM size = f(TX width)?',
-      ], derived:
-        '**Per-TX-block read order (verified, decodetxb.c:658).**\n\n' +
-        '1. `txb_skip` (all-zero?) → `tx_type` (+IST)\n' +
-        '2. `tcq_init_state` (:729)\n' +
-        '3. **EOB** position (`decode_eob` :300)\n' +
-        '4. **Reverse scan eob−1→1:** base level (0..3, `base_cdf[ctx][q_i]`) + low-range (`read_low_range` :151); `tcq_next_state` each coeff — chain 1 + chain 2.\n' +
-        '5. **DC (pos 0):** parity-hiding decision (:790) — infer or read (→ TCQ chapter).\n' +
-        '6. **Sign + high-range** (:878 / :900): DC sign = CDF, rest = bypass; large levels = adaptive Rice.\n' +
-        '7. **TCQ dequant** (:936): `qIdx = 2·level − Qx`.\n\n' +
-        '**Two structural facts:**\n' +
-        '- **Magnitude is built in escalating pieces:** base(0..3) → low-range(br) → high-range(rice). Most coeffs end at base.\n' +
-        '- **Two passes:** pass 1 (reverse, base + low-range) = the CDF + TCQ-state **serial loop**; pass 2 (sign + high-range) = mostly **bypass** bits → deferred, parallelizable. high-range adds `hr << (tcq_mode?1:0)` ⇒ even ⇒ **preserves parity** ⇒ the TCQ state is fully known from pass 1 — *that* is why sign/HR can be deferred.\n\n' +
-        '**Parity-hiding (verified, decodetxb.c:643).** When luma & `eob > PHTHRESH(4)` & ≥4 nonzeros, the **DC parity (LSB) is not coded** — it is inferred from `sum_abs1 & 1` (parity of the other coefficients magnitudes); only the quotient `q_index` is coded (dedicated `coeff_base_ph_cdf`), `level = 2·q_index + parity`. ~1 bit/block saved. **Why DC?** it is last in the reverse scan ⇒ its parity drives no downstream TCQ state, so hiding it costs nothing in the state chain. TCQ *uses* parity as information; parity-hiding *omits coding* the one parity TCQ does not need — they meet exactly at the DC.' } },
+      qna: [
+        { tag: 'verified', ref: 'decodetxb.c:658',
+          q: 'Read order of one TX block?',
+          a: '`txb_skip`/`tx_type` → `tcq_init_state` → **EOB** → **reverse scan** base(0..3) + low-range (`tcq_next_state` each coeff) → **DC parity-hiding** → **sign + high-range** → **TCQ dequant** (`qIdx = 2·level − Qx`).' },
+        { tag: 'delta',
+          q: 'How is a coefficient magnitude built?',
+          a: 'In **escalating pieces**: base level (0..3) → if saturated, low-range (`br`) → if still saturated, high-range (rice). Most coeffs end at the base symbol; only large ones climb.' },
+        { tag: 'hw',
+          q: 'Why two passes?',
+          a: 'pass 1 (reverse, base + low-range) = the CDF + TCQ-state **serial loop**; pass 2 (sign + high-range) = mostly **bypass** ⇒ deferred, parallelizable. high-range adds `hr << (tcq_mode?1:0)` = even ⇒ **parity preserved** ⇒ TCQ state is fully known from pass 1.' },
+        { tag: 'delta', ref: 'decodetxb.c:643',
+          q: 'Parity-hiding — what, and why the DC?',
+          a: 'When luma & `eob > 4` & ≥4 nonzeros, the **DC parity (LSB) is not coded** — inferred from `sum_abs1 & 1`; only the quotient is coded (dedicated `coeff_base_ph_cdf`), `level = 2·q_index + parity`. ~1 bit/block. **Why DC?** it is last in the reverse scan ⇒ its parity drives **no downstream TCQ state** ⇒ hiding it is free. TCQ *uses* parity; PH *omits coding* the one parity TCQ does not need.' },
+      ] },
     { id: 'e9', n: 9, title: '⭐ TCQ state machine', stage: 'skeleton',
       fn: { name: 'tcq_next_state', file: 'av2/common/quant_common.c', line: 73,
         role: '8-state FSM: parity of |level| picks the next state via an 8x2 LUT; state selects CDF and Q0/Q1.' },
@@ -520,37 +508,32 @@ window.TOOL = {
 '  class NB mem;\n  class CDF mem;\n  class QI op;\n  class LV op;\n  class NS op;\n  class DQ op;\n  class ST st;\n  class ST2 st;',
           caption: 'The base_cdf address for coeff k+1 (via q_i and neighbor levels) cannot form until coeff k is decoded → serial.' },
       ],
-      hw: { questions: [
-        '8-state FSM, next_state_lut_8st[8][2] indexed by (state, parity) — pure combinational; place it where in the pipe?',
-        'State feeds BOTH CDF selection and dequant → couples entropy parse with dequant. Stage-partition implications?',
-        'tcq_quant(state) = state & 2 → carried state, no lookahead. Impact on the per-coeff critical path?',
-      ], derived:
-        '**TCQ internals (verified, quant_common.h:71 / decodetxb.c:939).**\n\n' +
-        '`tcq_quant(state) = state & 2` → `Qx ∈ {0,1}` (one bit).\n\n' +
-        '**Dequant reconstruction** (decodetxb.c:944): `qIdx = max(0, (level<<1) − Qx)`, `dq = (qIdx·dqv) >> (shift+1)`.\n\n' +
-        '| | qIdx | grid |\n' +
-        '|---|---|---|\n' +
-        '| Q0 (Qx=0) | `2·level` | even multiples |\n' +
-        '| Q1 (Qx=1) | `2·level−1` | odd multiples |\n\n' +
-        'The `+1` in `>>(shift+1)` ⇒ a half-step-finer grid; Q0/Q1 are its even/odd sub-grids = **dependent quantization** (VVC-style). State = one bit choosing which sub-grid the coeff reconstructs on. TCQ gain: finer effective quantization for the same bits, by making reconstruction depend on the trellis path.\n\n' +
-        '**`base_cdf` parses the base level** — `avm_read_symbol(r, base_cdf[coeff_ctx][q_i], 4)` (:206) = the coefficient low-magnitude symbol (0..3); saturate → low-range → high-range.\n\n' +
-        '**Serial loop:** `q_i = tcq_quant(state)` → `level = base_cdf[coeff_ctx][q_i]` → `state = tcq_next_state(state, |level|)`. The address for coeff k+1 needs coeff k decoded. `coeff_base_cdf[…][TCQ_CTXS=2]` (entropy.h:64) is the dimension that ~2× the coeff CDF tables.' } },
+      qna: [
+        { tag: 'verified', ref: 'quant_common.h:71',
+          q: 'What is tcq_quant, and the Q0/Q1 dequant difference?',
+          a: '`tcq_quant(state) = state & 2` → `Qx ∈ {0,1}` (one bit). Dequant (decodetxb.c:944): `qIdx = max(0, 2·level − Qx)`, `dq = (qIdx·dqv) >> (shift+1)`. **Q0 = even-multiple grid, Q1 = odd-multiple grid** of a half-step-finer lattice = **dependent quantization** (VVC-style). State picks which sub-grid this coeff lands on.' },
+        { tag: 'verified', ref: 'decodetxb.c:206',
+          q: 'What does base_cdf parse, and why is it serial?',
+          a: '`base_cdf[coeff_ctx][q_i]` parses the base level (0..3). **Both** indices come from prior coeffs — neighbor `levels[]` + TCQ `state` — so coeff k+1’s CDF address cannot form until coeff k is decoded ⇒ serial. `coeff_base_cdf[…][TCQ_CTXS=2]` (entropy.h:64) is the dimension that ~2× the coeff CDF tables.' },
+        { tag: 'hw',
+          q: 'Why does TCQ tighten the bottleneck?',
+          a: 'State couples **entropy parse (CDF select) + dequant** into one carried-state loop; `tcq_next_state` is a cheap 8×2 LUT but it sits **inline** ⇒ no lookahead even though the FSM itself is nearly free. The gain (finer effective quantization for the same bits) is paid in serialization.' },
+      ] },
     { id: 'e10', n: 10, title: 'High-range Rice / Golomb', stage: 'skeleton',
       fn: { name: 'read_adaptive_hr', file: 'av2/decoder/decodetxb.c', line: 112,
         role: 'High-range suffix: adaptive Truncated-Rice / Exp-Golomb via bypass bits (no CDF).' },
       spec: { num: '5.20.6', title: 'Transform and quantization structures' },
-      hw: { questions: [
-        'Bypass bits = no CDF → multi-bit shifter; how many bits/cycle can the suffix decode?',
-        'Rice param m adapts from running hr_avg — small accumulator + table lookup.',
-        'HR engages only for large levels (rare). Share datapath with the bypass path or dedicate one?',
-      ], derived:
-        '**High-range = adaptive Truncated-Rice / Exp-Golomb (verified, decodetxb.c:112 / hr_coding.c).**\n\n' +
-        'Fires only when base + low-range saturates (`level >= MAX_BASE_BR_RANGE`) — rare, large coeffs.\n\n' +
-        '```\nm  = get_adaptive_param(hr_avg)                     // Rice param from running avg\nhr = read_truncated_rice(m, k=m+1, cmax=min(m+4,6)) // bypass bits\nlevel += hr << (tcq_mode ? 1 : 0)                  // x2 under TCQ\nhr_avg = (hr_avg + hr) >> 1                         // 1-tap EMA\n```\n\n' +
-        '- **Adaptive Rice param `m`** grows with `hr_avg` via a threshold table (`get_adaptive_param`, hr_coding.c:29) — self-tunes to recent statistics. Replaces AV1 fixed bit-golomb.\n' +
-        '- **Truncated Rice + Exp-Golomb tail**, all **bypass** (equiprobable) ⇒ no CDF, multi-bit shift ⇒ HW-friendly, parallelizable (the light pass-2 work).\n' +
-        '- **Why high-range can be deferred:** `hr << (tcq_mode?1:0)` is even under TCQ ⇒ **preserves level parity** ⇒ TCQ state is fully set by base + low-range, so high-range moves to pass 2 without breaking the serial state chain.\n\n' +
-        '**HW:** rare + bypass + a tiny running-avg register + threshold LUT; a small Rice/Golomb decoder sharing the bypass shifter.' } },
+      qna: [
+        { tag: 'verified', ref: 'decodetxb.c:112',
+          q: 'How does high-range coding work?',
+          a: 'Only when base+low-range saturates. `m = get_adaptive_param(hr_avg)` → `read_truncated_rice(m, k=m+1, cmax=min(m+4,6))` → `level += hr << (tcq?1:0)` → `hr_avg = (hr_avg+hr)>>1`. **Adaptive Rice parameter**, updated by a 1-tap EMA. Truncated Rice + Exp-Golomb tail.' },
+        { tag: 'delta', ref: 'hr_coding.c:29',
+          q: 'vs AV1?',
+          a: 'AV1 fixed bit-golomb → AV2 **adaptive** Truncated-Rice/Exp-Golomb: `m` self-tunes to recent magnitudes via a threshold table (`get_adaptive_param`).' },
+        { tag: 'hw',
+          q: 'Why is it HW-friendly?',
+          a: 'All **bypass** (equiprobable) ⇒ no CDF, multi-bit shift, parallel. Rare (large levels) + a tiny running-avg register + a threshold LUT = a small Rice/Golomb decoder sharing the bypass shifter. This is the light pass-2 work.' },
+      ] },
     { id: 'e11', n: 11, title: 'HW synthesis (ENT stage) — capstone', stage: 'skeleton',
       fn: { name: '(whole stage)',
         role: 'Synthesis of E2–E10 + parity-hiding: the symbols/clk ceiling, the only scaling axis, total CDF SRAM, what offloads the serial path.' },

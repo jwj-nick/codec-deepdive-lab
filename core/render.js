@@ -233,7 +233,9 @@ window.Render = (function () {
       ? '<div class="hw-openq"><h3>Guiding questions (derive)</h3><ol>' + h.questions.map(q => '<li>' + inl(q) + '</li>').join('') + '</ol></div>' : '';
     const derived = h.derived
       ? '<div class="hw-derived"><h3>Derived</h3>' + md(h.derived) + '</div>'
-      : '<p class="muted">↑ Derive these in a <code>codec-study ' + esc(ch.id) + '</code> session; answers get formalized here.</p>';
+      : (h.questions && h.questions.length
+          ? '<p class="muted">↑ Derive these in a <code>codec-study ' + esc(ch.id) + '</code> session; answers get formalized here.</p>'
+          : '');
     return sectionWrap('ch-hw', 'L4 · HW architecture', guard + dp + qs + derived);
   }
   function chChecks(ch) {
