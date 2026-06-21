@@ -473,7 +473,8 @@ window.TOOL = {
         '7. **TCQ dequant** (:936): `qIdx = 2·level − Qx`.\n\n' +
         '**Two structural facts:**\n' +
         '- **Magnitude is built in escalating pieces:** base(0..3) → low-range(br) → high-range(rice). Most coeffs end at base.\n' +
-        '- **Two passes:** pass 1 (reverse, base + low-range) = the CDF + TCQ-state **serial loop**; pass 2 (sign + high-range) = mostly **bypass** bits → deferred, parallelizable. high-range adds `hr << (tcq_mode?1:0)` ⇒ even ⇒ **preserves parity** ⇒ the TCQ state is fully known from pass 1 — *that* is why sign/HR can be deferred.' } },
+        '- **Two passes:** pass 1 (reverse, base + low-range) = the CDF + TCQ-state **serial loop**; pass 2 (sign + high-range) = mostly **bypass** bits → deferred, parallelizable. high-range adds `hr << (tcq_mode?1:0)` ⇒ even ⇒ **preserves parity** ⇒ the TCQ state is fully known from pass 1 — *that* is why sign/HR can be deferred.\n\n' +
+        '**Parity-hiding (verified, decodetxb.c:643).** When luma & `eob > PHTHRESH(4)` & ≥4 nonzeros, the **DC parity (LSB) is not coded** — it is inferred from `sum_abs1 & 1` (parity of the other coefficients magnitudes); only the quotient `q_index` is coded (dedicated `coeff_base_ph_cdf`), `level = 2·q_index + parity`. ~1 bit/block saved. **Why DC?** it is last in the reverse scan ⇒ its parity drives no downstream TCQ state, so hiding it costs nothing in the state chain. TCQ *uses* parity as information; parity-hiding *omits coding* the one parity TCQ does not need — they meet exactly at the DC.' } },
     { id: 'e9', n: 9, title: '⭐ TCQ state machine', stage: 'skeleton',
       fn: { name: 'tcq_next_state', file: 'av2/common/quant_common.c', line: 73,
         role: '8-state FSM: parity of |level| picks the next state via an 8x2 LUT; state selects CDF and Q0/Q1.' },
@@ -518,7 +519,14 @@ window.TOOL = {
         'Bypass bits = no CDF → multi-bit shifter; how many bits/cycle can the suffix decode?',
         'Rice param m adapts from running hr_avg — small accumulator + table lookup.',
         'HR engages only for large levels (rare). Share datapath with the bypass path or dedicate one?',
-      ], derived: null } },
+      ], derived:
+        '**High-range = adaptive Truncated-Rice / Exp-Golomb (verified, decodetxb.c:112 / hr_coding.c).**\n\n' +
+        'Fires only when base + low-range saturates (`level >= MAX_BASE_BR_RANGE`) — rare, large coeffs.\n\n' +
+        '```\nm  = get_adaptive_param(hr_avg)                     // Rice param from running avg\nhr = read_truncated_rice(m, k=m+1, cmax=min(m+4,6)) // bypass bits\nlevel += hr << (tcq_mode ? 1 : 0)                  // x2 under TCQ\nhr_avg = (hr_avg + hr) >> 1                         // 1-tap EMA\n```\n\n' +
+        '- **Adaptive Rice param `m`** grows with `hr_avg` via a threshold table (`get_adaptive_param`, hr_coding.c:29) — self-tunes to recent statistics. Replaces AV1 fixed bit-golomb.\n' +
+        '- **Truncated Rice + Exp-Golomb tail**, all **bypass** (equiprobable) ⇒ no CDF, multi-bit shift ⇒ HW-friendly, parallelizable (the light pass-2 work).\n' +
+        '- **Why high-range can be deferred:** `hr << (tcq_mode?1:0)` is even under TCQ ⇒ **preserves level parity** ⇒ TCQ state is fully set by base + low-range, so high-range moves to pass 2 without breaking the serial state chain.\n\n' +
+        '**HW:** rare + bypass + a tiny running-avg register + threshold LUT; a small Rice/Golomb decoder sharing the bypass shifter.' } },
     { id: 'e11', n: 11, title: 'HW synthesis (ENT stage)', stage: 'skeleton',
       fn: { name: '(whole stage)',
         role: 'Put it together: throughput ceiling, total CDF SRAM, the serial critical path, the parallelism axis.' },
