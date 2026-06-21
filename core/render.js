@@ -31,8 +31,11 @@ window.Render = (function () {
       return;
     }
     document.title = ch.title + ' — ' + T.title;
-    const skel = ch.stage !== 'full'
-      ? '<div class="skel-banner">🚧 <b>Skeleton</b> — line-by-line walkthrough pending. Fill while studying via <code>codec-study ' + esc(ch.id) + '</code>.</div>' : '';
+    const hasDerived = ch.hw && ch.hw.derived;
+    const skel = ch.stage === 'full' ? ''
+      : hasDerived
+        ? '<div class="skel-banner ok">📝 <b>HW derivation captured</b> (Socratic session notes in the HW section). Line-by-line code walkthrough still pending.</div>'
+        : '<div class="skel-banner">🚧 <b>Skeleton</b> — line-by-line walkthrough pending. Fill while studying via <code>codec-study ' + esc(ch.id) + '</code>.</div>';
     root.innerHTML = chHeader(T, ch) + skel + chSpec(ch) + chFigures(ch) + chWalk(ch) + chStructs(ch) + chIO(ch) + chHW(ch) + chChecks(ch) + chNav(T, ch);
     postRender();
   }

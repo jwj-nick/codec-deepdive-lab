@@ -244,6 +244,7 @@ th{background:var(--panel2);color:var(--mut);font-weight:600}
 /* skeleton banner */
 .skel-banner{background:#211c10;border:1px solid #5a4a1f;border-radius:8px;padding:9px 12px;
   font-size:.86rem;color:#e9d8a6;margin:0 0 14px}
+.skel-banner.ok{background:#10171a;border-color:#25403a;color:#a6e9c8}
 .ch-st.full{color:var(--good)}
 
 /* ascii figure (intuition) */
