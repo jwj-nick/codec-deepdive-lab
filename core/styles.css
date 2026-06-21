@@ -201,6 +201,7 @@ th{background:var(--panel2);color:var(--mut);font-weight:600}
 .ch-t{flex:1;font-weight:600;font-size:.95rem}
 .ch-t .ch-fn{font:.78rem var(--mono);color:var(--mut);font-weight:400}
 .ch-st{flex:0 0 auto;font-size:.78rem;color:var(--acc)}
+.ch-st.derived{color:var(--good)}
 .ch-item.soon .ch-st{color:var(--dim)}
 
 /* 챕터 뷰 */

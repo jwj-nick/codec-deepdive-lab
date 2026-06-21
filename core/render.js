@@ -116,14 +116,16 @@ window.Render = (function () {
   function secChapters(T) {
     if (!T.chapters || !T.chapters.length) return '';
     const items = T.chapters.map(c => {
-      const st = c.stage === 'full' ? 'walkthrough →' : 'skeleton →';
+      const hasDerived = c.hw && c.hw.derived;
+      const st = c.stage === 'full' ? 'walkthrough →' : hasDerived ? '📝 notes →' : 'open Q →';
+      const stCls = c.stage === 'full' ? ' full' : hasDerived ? ' derived' : '';
       const inner = '<span class="ch-n">' + esc(c.n) + '</span>' +
         '<span class="ch-t">' + esc(c.title) + (c.fn ? ' <span class="ch-fn">' + esc(c.fn.name) + '()</span>' : '') + '</span>' +
-        '<span class="ch-st' + (c.stage === 'full' ? ' full' : '') + '">' + st + '</span>';
+        '<span class="ch-st' + stCls + '">' + st + '</span>';
       return '<a class="ch-item" href="app.html?tool=' + T.id + '&ch=' + c.id + '">' + inner + '</a>';
     }).join('');
     return sectionWrap('chapters', 'Deep-dive chapters (function-level → HW)',
-      '<p class="muted">Each chapter dissects one function line-by-line, then reasons to HW. The HW section is yours to derive via <code>codec-study</code>.</p>' +
+      '<p class="muted"><b>📝 notes</b> = derived in a Socratic session (see the chapter HW section) · <b>open Q</b> = questions still waiting for you · <b>walkthrough</b> = full line-by-line.</p>' +
       '<div class="ch-list">' + items + '</div>');
   }
 

@@ -527,14 +527,16 @@ window.TOOL = {
         '- **Truncated Rice + Exp-Golomb tail**, all **bypass** (equiprobable) ⇒ no CDF, multi-bit shift ⇒ HW-friendly, parallelizable (the light pass-2 work).\n' +
         '- **Why high-range can be deferred:** `hr << (tcq_mode?1:0)` is even under TCQ ⇒ **preserves level parity** ⇒ TCQ state is fully set by base + low-range, so high-range moves to pass 2 without breaking the serial state chain.\n\n' +
         '**HW:** rare + bypass + a tiny running-avg register + threshold LUT; a small Rice/Golomb decoder sharing the bypass shifter.' } },
-    { id: 'e11', n: 11, title: 'HW synthesis (ENT stage)', stage: 'skeleton',
+    { id: 'e11', n: 11, title: 'HW synthesis (ENT stage) — capstone', stage: 'skeleton',
       fn: { name: '(whole stage)',
-        role: 'Put it together: throughput ceiling, total CDF SRAM, the serial critical path, the parallelism axis.' },
+        role: '⏭ **Next up.** Synthesize everything derived (E2–E10 + parity-hiding): the symbols/clk ceiling, total CDF SRAM, the only scaling axis. Yours to derive.' },
+      spec: { num: '8.2–8.3 · 5.20.6', title: 'Entropy decode — stage synthesis' },
       hw: { questions: [
-        'Symbol/cycle ceiling from the serial chain (CDF-search iters + multiply + normalize + TCQ update).',
-        'Total CDF SRAM budget (TCQ_CTXS, parity-hiding, EOB banks) — sizing.',
-        'Tile-level parallelism is the only scaling axis — how many entropy instances for a target Mpix/s?',
-        'Where can you pipeline without breaking the carried od_ec_dec + TCQ state?',
+        '**▶ The next question:** write the serial sum that sets the **symbols/clk ceiling** — chain 1 (boundary search + multiply + narrow + renormalize) + chain 2 (CDF read-update-writeback, same context) + TCQ state update. Which term dominates?',
+        '**Only scaling axis:** inside a tile everything is serial (carried `od_ec` + TCQ state). So what is the *only* way to raise total Mpix/s? (hint from E2: where is the one independent boundary?)',
+        '**Total CDF SRAM budget:** `coeff_base` [×`TCQ_CTXS=2`] + `base_lf` + `br` + parity-hiding (`coeff_base_ph`) + EOB banks (`eob_flag_cdf16…1024`) + all mode CDFs. Rough sizing?',
+        '**bypass / 4-part / sign are CDF-free** (no RMW) — how much do they offload the serial CDF path, and can they decode multi-bit/clk in parallel?',
+        '**Where can you pipeline** *without* breaking the carried `od_ec_dec` + TCQ state? (context class 1 precompute from E5 is the one safe spot.)',
       ], derived: null } },
   ],
 };
