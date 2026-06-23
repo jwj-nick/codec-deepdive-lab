@@ -6,7 +6,10 @@ window.TOOL = {
   title: 'In-loop Filters',
   stage: 'LPF',
   coupling: ['PRD'],
-  role: '복원 후 5-패스 필터: deblock→CDEF→CCSO→LR→GDF. AV2 신규 **CCSO·GDF**, LR은 PC-Wiener로 교체. ⭐**GDF=학습 정수 MAC 필터**(NPU 닮은 datapath).',
+  role: '복원 후 5-패스 필터 **허브**: ' +
+    '<a href="app.html?tool=deblock">deblock</a> → <a href="app.html?tool=cdef">CDEF</a> → ' +
+    '<a href="app.html?tool=ccso">CCSO</a> → <a href="app.html?tool=lr">LR(PC-Wiener)</a> → <a href="app.html?tool=gdf">GDF</a>. ' +
+    'AV2 신규 **CCSO·GDF**, LR은 PC-Wiener로 교체. ⭐**GDF=학습 정수 MAC 필터**(설계기법 NPU 전이점). 각 필터는 전용 페이지 참조.',
 
   // ── L1 Spec ────────────────────────────────────────────────
   spec: {
@@ -183,159 +186,37 @@ window.TOOL = {
   ],
 
   chapters: [
-    { id: 'l1', n: 1, title: 'Filter chain order', stage: 'skeleton',
+    { id: 'l1', n: 1, title: 'Filter chain order (hub)', stage: 'skeleton',
       fn: { name: 'in-loop filter sequence', file: 'av2/decoder/decodeframe.c', line: 9923,
         role: 'Apply order: deblock → CDEF → CCSO → Loop Restoration → GDF, each a full-frame read-modify-write pass.' },
       spec: { num: '7.17-7.20', title: 'In-loop filter chain' },
-      hw: { questions: [
-        '5 sequential passes — line-buffer + bandwidth per pass. Can any be fused?',
-        'CCSO and GDF read luma after prior passes → cross-component ordering.',
-      ], derived: null } },
-    { id: 'l2', n: 2, title: 'Deblock (generic filter)', stage: 'skeleton',
-      fn: { name: 'avm_highbd_lpf_*_generic', file: 'avm_dsp/loopfilter.c', line: 181,
-        role: 'Parameterized asymmetric filter (runtime tap widths) replacing AV1 fixed filter4/6/8/14; plus TIP deblock.' },
-      spec: { num: '7.17', title: 'Deblocking filter process' },
-      hw: { questions: [
-        'Runtime asymmetric tap width → pipeline must size for max width. Data-dependent control?',
-        'Edge line buffers (vertical then horizontal passes) — sizing.',
-      ], derived: null } },
-    { id: 'l3', n: 3, title: 'CDEF (8-direction)', stage: 'skeleton',
-      fn: { name: 'av2_cdef_frame', file: 'av2/common/cdef.c', line: 479,
-        role: '64×64 FB: 8-direction variance search + 2-pass (primary + secondary) filtering.' },
-      spec: { num: '7.18', title: 'CDEF process' },
-      hw: { questions: [
-        'Per-64×64 8-direction search + 2-pass filter — halo line/col buffers?',
-        'Mostly unchanged from AV1 — reuse the AV1 CDEF block?',
-      ], derived: null } },
-    { id: 'l4', n: 4, title: '⭐ CCSO (cross-component offset)', stage: 'skeleton',
-      fn: { name: 'apply_ccso_filter', file: 'av2/common/ccso.c', line: 249,
-        role: 'Classify co-located luma edge (3/2 levels) + band → index a small int8 offset LUT → add to the output plane.' },
-      spec: { num: '7.19', title: 'CCSO process' },
-      io: {
-        diagCaption: 'luma classify → LUT → add to chroma',
-        diagram: 'graph TD\n' +
-          '  LUMA["ext_rec_y<br/>padded luma plane (SRAM)"] --> CLS["edge classify<br/>2 taps → src_cls, band"]\n' +
-          '  CLS --> IDX["lut_idx = band·16 + cls"]\n' +
-          '  ROM["offset_buf int8<br/>[3][64×16]"] --> SEL["offset_val"]\n' +
-          '  IDX --> SEL\n' +
-          '  DST["dst plane (cdef out)"] --> ADD["+ offset, clamp"]\n' +
-          '  SEL --> ADD\n' +
-          '  ADD --> OUT["dst&#39; → LR"]\n' +
-          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
-          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
-          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
-          '  class LUMA mem;\n  class DST mem;\n  class OUT mem;\n  class ROM rom;\n  class CLS op;\n  class IDX op;\n  class SEL op;\n  class ADD op;',
-        in: [
-          { sig: 'dst (cdef out)', type: 'uint16', peer: '← CDEF', vol: 'block', note: 'in-place RMW' },
-          { sig: 'ext_rec_y', type: 'uint16 (padded luma)', peer: 'recon luma SRAM', vol: 'co-located, chroma-aligned', note: '2-tap edge classify — forces luma-before-chroma' },
-          { sig: 'offset_buf', type: 'int8 filter_offset[3][64×16]', peer: 'ROM', vol: '64 band × 16 class × 3 plane', note: 'small LUT' },
-        ],
-        out: [
-          { sig: "dst'", type: 'uint16 (offset added)', peer: '→ LR', vol: 'block', note: 'clamp to bitdepth' },
-        ],
-        note: 'Cheap arithmetic, but the **cross-component read of a padded full-luma plane** is the real HW cost: that plane must be resident in SRAM and luma must be filtered first.',
-      },
-      hw: { questions: [
-        'Needs a padded full-luma plane (ext_rec_y) in SRAM. Sizing and reuse?',
-        'Per-pixel: 2 luma taps + classify + LUT add — cheap, but cross-component ordering forces chroma after luma.',
-        'LUT filter_offset[3][64×16] int8 — small ROM/SRAM addressing.',
-      ], derived: null } },
-    { id: 'l5', n: 5, title: 'GDF table selection', stage: 'skeleton',
-      fn: { name: 'gdf_get_qp_idx_base / ref_dst_idx', file: 'av2/common/gdf.c', line: 505,
-        role: 'Select GDF weight/bias/error tables by intra/inter, QP bucket (6), ref-distance bucket (5).' },
-      spec: { num: '7.20.5', title: 'Apply GDF filter process' },
-      hw: { questions: [
-        'Table selection → ROM bank addressing (6 QP × 5 refdist × intra/inter). Bank-switch cost?',
-        'Per-2×2 class id (4 classes) precompute — gradient/Laplacian classifier.',
-      ], derived: null } },
-    { id: 'l6', n: 6, title: '⭐⭐ GDF inference (66 MAC/px)', stage: 'skeleton',
-      fn: { name: 'gdf_inference_unit', file: 'av2/common/gdf_block.c', line: 585,
-        role: '22 inputs (18 sample-diffs + 4 gradients) → alpha-clip → 22×3 integer MACs → bias → normalize → 3D error-LUT.' },
-      spec: { num: '7.20.5', title: 'Apply GDF filter process' },
-      io: {
-        diagCaption: 'gather → clip → 66 MAC → LUT activation',
-        diagram: 'graph TD\n' +
-          '  REC["recon luma<br/>+ line buffer (fwd/bwd nbr)"] --> GTH["gather 22 inputs<br/>18 diff + 4 grad"]\n' +
-          '  ALP["alpha ROM<br/>int16"] --> CLP["per-input clip"]\n' +
-          '  GTH --> CLP\n' +
-          '  WT["weight ROM<br/>int16 [QP6][refdst5][4·22·3]"] --> MAC["MAC array<br/>22×3 = 66 int MAC/px"]\n' +
-          '  CLP --> MAC\n' +
-          '  BIA["bias ROM int32"] --> NRM["+bias → GDF_NORM_IDX"]\n' +
-          '  MAC --> NRM\n' +
-          '  ELU["error-LUT int8<br/>3D (intra 16³ / inter 10³)"] --> ACT["LUT activation"]\n' +
-          '  NRM --> ACT\n' +
-          '  ACT --> OUT["err residual<br/>→ compensation (l7)"]\n' +
-          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
-          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
-          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
-          '  classDef hot fill:#2a1414,stroke:#ff7b72,color:#fff;\n' +
-          '  class REC mem;\n  class OUT mem;\n  class ALP rom;\n  class WT rom;\n  class BIA rom;\n  class ELU rom;\n' +
-          '  class GTH op;\n  class CLP op;\n  class NRM op;\n  class ACT op;\n  class MAC hot;',
-        in: [
-          { sig: 'rec nbr (fwd/bwd)', type: 'uint16', peer: 'recon luma + line buffer', vol: '22 inputs/px', note: '18 sample-diff + 4 gradient' },
-          { sig: 'weight', type: 'int16 [QP6][refdst5][4·22·3]', peer: 'weight ROM', vol: 'per (intra/inter,QP,refdst,class)', note: 'learned MAC weights' },
-          { sig: 'alpha / bias', type: 'int16 / int32', peer: 'ROM', vol: 'per class/input', note: 'clip bounds + accum bias' },
-          { sig: 'error_table', type: 'int8 3D (intra 16³ / inter 10³)', peer: 'ROM', vol: 'activation LUT', note: 'replaces arithmetic activation' },
-        ],
-        out: [
-          { sig: 'err residual', type: 'int16', peer: '→ compensation (l7) → rec add', vol: '1 / luma px', note: '66 int MAC/px — the decoder-NPU datapath' },
-        ],
-        note: 'The flagship decoder-NPU block: **weight ROM → integer MAC array → LUT activation**, bit-exact, every luma pixel. Identical shape to DIP / MHCCP / IST — the strongest case for one shared MAC array.',
-      },
-      hw: { questions: [
-        '66 int MACs/pixel (22×3) — systolic MAC array sizing for luma throughput?',
-        'Weight ROM (int16) + 3D error-LUT (int8, intra 16³ / inter 10³) — total storage and read ports?',
-        'Per-input alpha clip + fwd/bwd gather — the gather/clip front-end before the MAC.',
-        'This is the closest thing to an NPU in the decoder — would a shared MAC array (with DIP/MHCCP/IST) serve all?',
-      ], derived: null } },
-    { id: 'l7', n: 7, title: 'GDF compensation', stage: 'skeleton',
-      fn: { name: 'gdf_compensation_unit', file: 'av2/common/gdf_block.c', line: 553,
-        role: 'Scale the error-LUT residual and add to the reconstructed sample with clip.' },
-      spec: { num: '7.20.5', title: 'Apply GDF filter process' },
-      hw: { questions: [
-        'Residual scale + clipped add — simple per-pixel back-end after inference.',
-        'Reference-line setup (stripe-based) — line buffers for GDF?',
-      ], derived: null } },
-    { id: 'l8', n: 8, title: 'PC-Wiener (classify + learned filter)', stage: 'skeleton',
-      fn: { name: 'pc_wiener classify + apply', file: 'av2/common/restoration.c', line: 940,
-        role: 'Per-pixel 4-feature classify → 4096 LUT → 256 classes → one of 64 learned int16 13-tap filters.' },
-      spec: { num: '7.20', title: 'Loop restoration process' },
-      io: {
-        diagCaption: 'classify → select filter → 13-tap conv',
-        diagram: 'graph TD\n' +
-          '  REC["rec pixels<br/>+ line buffer"] --> FEAT["4-feature quantize<br/>Σ thr·feat"]\n' +
-          '  CLUT["class LUT<br/>4096 entries"] --> CLS["256 classes"]\n' +
-          '  FEAT --> CLS\n' +
-          '  BANK["filter bank<br/>int16 64 × 13-tap"] --> SEL["select 13-tap"]\n' +
-          '  CLS --> SEL\n' +
-          '  REC --> CONV["13-tap conv (MAC)"]\n' +
-          '  SEL --> CONV\n' +
-          '  CONV --> OUT["restored → GDF"]\n' +
-          '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
-          '  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
-          '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
-          '  class REC mem;\n  class OUT mem;\n  class CLUT rom;\n  class BANK rom;\n  class FEAT op;\n  class CLS op;\n  class SEL op;\n  class CONV op;',
-        in: [
-          { sig: 'rec pixels', type: 'uint16', peer: '← CCSO out + line buffer', vol: '13-tap window/px', note: '4-feature classify input' },
-          { sig: 'class_lut', type: '4096-entry', peer: 'ROM', vol: 'feature → class', note: '4-feature → 256 classes' },
-          { sig: 'filter_bank', type: 'int16 64 × 13-tap', peer: 'ROM', vol: '64 filters', note: 'selected by class' },
-        ],
-        out: [
-          { sig: 'restored', type: 'uint16', peer: '→ GDF', vol: '1 / px', note: '13-tap learned conv' },
-        ],
-        note: 'A second classifier→learned-filter (NPU-adjacent): a 4096-entry class LUT front-end feeding a 64×13-tap filter bank. Pairs with GDF as the two LPF MAC blocks.',
-      },
-      hw: { questions: [
-        'Another classifier→learned-filter (NPU-adjacent). Feature line buffers + 13-tap conv MACs?',
-        '64 filters × 13 taps int16 ROM + 4096-entry class LUT — storage.',
-      ], derived: null } },
+      qna: [
+        { tag: 'verified', ref: 'decodeframe.c:9923',
+          q: 'AV2 in-loop 필터 순서와 함수는? (실측)',
+          a: '`av2_loop_filter_frame`(:9923, deblock) → `av2_cdef_frame`(:9985) → `ccso_frame`(:9999) → `av2_loop_restoration_filter_frame`(:10026) → `av2_gdf_frame_dec`(:10037). **5 순차 full-frame 패스**. 각 필터 전용 페이지: [deblock](app.html?tool=deblock)·[CDEF](app.html?tool=cdef)·[CCSO](app.html?tool=ccso)·[LR](app.html?tool=lr)·[GDF](app.html?tool=gdf).' },
+        { tag: 'delta', ref: 'decodeframe.c:9999',
+          q: 'AV1 대비 체인이 어떻게 바뀌었나? (AV2 델타)',
+          a: 'AV1 = deblock→CDEF→LR (3패스). AV2 = **+CCSO +GDF** → 5패스, LR도 PC-Wiener로 교체. 신규 CCSO(luma-guided)·GDF(학습 MAC)는 AV1 grep 0건. 패스 3→5 → 라인버퍼·대역폭·직렬 깊이 증가.' },
+        { tag: 'hw', ref: 'decodeframe.c:9923',
+          q: '체인이 만드는 HW 직렬성은?',
+          a: '5 패스 **직렬**(앞 출력=뒤 입력). 특히 **CCSO·GDF가 필터된 luma에 의존**(cross-component) → chroma/후단 순서 강제. 각 패스 내부는 타일/stripe 병렬이나 패스 간은 순차 사슬. GDF는 LR 뒤 별도 패스.' },
+      ] },
     { id: 'l9', n: 9, title: 'HW synthesis (LPF, line buffers)', stage: 'skeleton',
       fn: { name: '(whole stage)',
-        role: 'Put it together: 5 sequential passes, heavy line buffers, two learned-filter MAC blocks (GDF, PC-Wiener).' },
-      hw: { questions: [
-        'Total line-buffer budget across 5 passes — fuse passes / tile-pipeline to reduce?',
-        'GDF + PC-Wiener MACs — share with IQT/intra MAC array (decoder-NPU)?',
-        'GDF runs as a separate pass after LR — fuse with LR to save a frame R-M-W?',
-      ], derived: null } },
+        role: '5 sequential passes, heavy line buffers, two learned-filter MAC blocks (GDF, PC-Wiener) — each a dedicated module.' },
+      qna: [
+        { tag: 'hw',
+          q: 'LPF 전체를 HW로 요약하면?',
+          a: '**5 순차 full-frame 패스**(deblock→CDEF→CCSO→LR→GDF), 각 라인버퍼 대량 소비. 무거운 둘 = **GDF**(픽셀당 66 int MAC + error-LUT, luma 전 픽셀 → worst-case throughput 정의)와 **PC-Wiener**(분류→비분리 conv). CCSO/CDEF/deblock은 상대적으로 가벼움.' },
+        { tag: 'hw',
+          q: 'GDF·PC-Wiener MAC은 다른 스테이지와 공유하나?',
+          a: '⚠️ **아니오 — 전용 LPF 모듈.** LPF는 IQT·intra의 MAC와 **동시가동**(streaming 파이프)이라 스테이지 간 어레이 시분할 불가. GDF/PC-Wiener는 각자 전용 MAC 모듈. NPU 연결 = **모듈별 MAC-array 설계기법 전이**(공유 실리콘 아님).' },
+        { tag: 'hw',
+          q: '라인버퍼/패스 융합 여지는?',
+          a: 'GDF는 LR 뒤 **별도 full-frame 패스** → LR과 융합(fuse)하면 프레임 R-M-W 1회·라인버퍼 절감 가능(spec은 LR 하위로 묶음). 5 패스 라인버퍼 총량이 LPF 면적의 핵심 — 타일 파이프라이닝/패스 융합이 최적화 축.' },
+        { tag: 'hw',
+          q: 'GDF error-LUT를 activation으로 보는 관점은?',
+          a: 'GDF의 3D error-LUT(int8) = 산술 activation을 **ROM 조회로 대체**. LUT vs 산술 activation의 면적/지연 트레이드는 NPU 설계와 동일 질문 — 디코더 정수 NN-블록에서 그대로 재현됨.' },
+      ] },
   ],
 };

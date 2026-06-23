@@ -47,6 +47,22 @@
     </a>
   </section>
 
+  <section class="pipeline-intro">
+    <h2>LPF — in-loop 필터별 전용 페이지</h2>
+    <p>5-패스 체인의 각 필터를 따로. 허브: <a href="app.html?tool=lpf">LPF 체인 개요</a>.</p>
+    <div class="launcher-flow">
+      <a class="launch-card" href="app.html?tool=deblock"><div class="lc-hw">LPF 1/5</div><div class="lc-label">Deblock</div><div class="lc-role">비대칭 가변폭 generic 필터(AV1 고정탭 대체)</div><div class="lc-status">심화 →</div></a>
+      <span class="flow">▸</span>
+      <a class="launch-card" href="app.html?tool=cdef"><div class="lc-hw">LPF 2/5</div><div class="lc-label">CDEF</div><div class="lc-role">8방향 디링잉(AV1 공통 기반)</div><div class="lc-status">심화 →</div></a>
+      <span class="flow">▸</span>
+      <a class="launch-card" href="app.html?tool=ccso"><div class="lc-hw">LPF 3/5 ⭐</div><div class="lc-label">CCSO</div><div class="lc-role">luma-guided 오프셋 LUT(신규)</div><div class="lc-status">심화 →</div></a>
+      <span class="flow">▸</span>
+      <a class="launch-card" href="app.html?tool=lr"><div class="lc-hw">LPF 4/5 ⭐</div><div class="lc-label">LR · PC-Wiener</div><div class="lc-role">분류기→학습 비분리 필터(신규)</div><div class="lc-status">심화 →</div></a>
+      <span class="flow">▸</span>
+      <a class="launch-card" href="app.html?tool=gdf"><div class="lc-hw">LPF 5/5 ⭐⭐</div><div class="lc-label">GDF</div><div class="lc-role">학습 정수 66-MAC 필터 + error-LUT</div><div class="lc-status">심화 →</div></a>
+    </div>
+  </section>
+
   <section class="card note">
     <h3>이 앱이 다루는 4계층</h3>
     <ol class="layers">
