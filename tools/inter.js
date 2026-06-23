@@ -5,7 +5,8 @@ window.TOOL = {
   title: 'Inter Prediction',
   stage: 'PRD·MEM',
   coupling: ['MIP', 'IQT'],
-  role: '모션보상 예측 — **DRAM 대역폭 지배** 스테이지. AV2는 **TIP·DMVR·광류 정제·7-레벨 MV정밀도·12-tap·refmvbank**로 fetch/연산 패스 대폭 증가.',
+  role: '모션보상 예측 — **DRAM 대역폭 지배** 스테이지. AV2는 **TIP·DMVR·광류 정제·12-tap**로 fetch/연산 패스 대폭 증가. ' +
+    'MV를 *어떻게 예측·복원*하나(후보 스택·DRL·ref-MV bank·7-level 정밀도·MVD)는 전용 페이지 ▶ <a href="app.html?tool=mvp">MVP</a>. 여기 r8/r9는 그 요약.',
 
   // ── L1 Spec ────────────────────────────────────────────────
   spec: {

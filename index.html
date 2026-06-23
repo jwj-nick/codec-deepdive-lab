@@ -38,6 +38,13 @@
         <b>모드별 전용 module이 기본</b>(streaming 파이프=동시가동→시분할 불가). 각 모듈의 MAC datapath 설계가 NPU 기법 전이점.</div>
       <div class="lc-status">inventory 보기 →</div>
     </a>
+    <a class="launch-card" href="app.html?tool=mvp" style="flex:1 1 100%;border-color:#3a3a5a;margin-top:8px">
+      <div class="lc-hw">MVP · inter 분리</div>
+      <div class="lc-label">🎯 Motion Vector Prediction — 후보 스택 → DRL → MVD → MV</div>
+      <div class="lc-role">MV를 <b>어떻게 예측·복원</b>하나: <code>find_mv_refs</code>(6칸 스택)+warp 후보 → DRL 인덱스 → MVD 가산.
+        AV2 신규 ref-MV bank(영속)·7-level 정밀도·AMVD. inter MC의 입력단, 이웃-직렬 ENT 결합.</div>
+      <div class="lc-status">MV 예측 보기 →</div>
+    </a>
     <a class="launch-card" href="app.html?tool=recon" style="flex:1 1 100%;border-color:#2e4a5a;margin-top:8px">
       <div class="lc-hw">RECON · intra/inter 공유</div>
       <div class="lc-label">🔁 Reconstruct loop — predict(이웃/참조) → IQT 잔차 → clip-add</div>
