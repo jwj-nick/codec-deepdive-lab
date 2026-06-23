@@ -75,7 +75,7 @@ window.TOOL = {
           '    c2[i] = clamp(ROUND(tmp1, CCTX_PREC_BITS), 8+bd);\n' +
           '  }\n' +
           '}',
-        note: '⭐ **CCTX = U/V 색차 계수 2×2 회전**(decorrelation). 계수당 4 곱셈. `cctx_mtx=[cosθ,sinθ]·256`, 7종 각도. **U·V를 함께** 처리(교차의존).' },
+        note: '⭐ **CCTX = U/V 색차 계수 2×2 회전**(Givens, decorrelation). 계수당 4 곱셈. `cctx_mtx[6][2]=[cosθ,sinθ]·256`, **6각도**(45°=Haar/±30/±60). **U·V를 함께** 처리(교차의존).' },
       { file: 'av2/common/idct.c', line: 998, name: 'av2_inverse_transform_block', lang: 'c',
         note: '역변환 top 진입. 흐름: `init_txfm_param`(:877) → `av2_inv_stxfm`(IST, :1019) → master_add → `inv_txfm_c`(2D 1차). IST가 **1차 변환보다 먼저** 좌상단 계수에 적용.' },
       { file: 'av2/common/idct.c', line: 643, name: 'inv_txfm_c', lang: 'c',
@@ -150,7 +150,7 @@ window.TOOL = {
       'IST/CCTX는 작은 오버헤드(좌상단 계수·계수당 소수 곱). 64폭은 좌상단 32만 비영(zero-out+2배 복제)이라 연산 절감. ' +
       '직렬 리스크는 **TCQ 역양자화 2-pass**(상태 carried, ENT와 공유) — IQT 본체보다 엔트로피쪽 병목.',
     memory:
-      '**커널 ROM 증가:** IST(`ist_4x4_kernel[14][3][16][16]`+8×8), DDT(`tx_kernel_ddtx_size4/8/16`), CCTX(`cctx_mtx[7][2]`) + 1차 1D 계수 ROM + QM. ' +
+      '**커널 ROM 증가:** IST(`ist_4x4_kernel[14][3][16][16]`+8×8), DDT(`tx_kernel_ddtx_size4/8/16`), CCTX(`cctx_mtx[6][2]`) + 1차 1D 계수 ROM + QM. ' +
       'int16 ROM은 init때 **int32 LUT로 확장**(곱셈 폭↑). dequant·계수 모두 **int32**(AV1 int16) → datapath/버퍼 폭 확대. 블록버퍼 `MAX_TX_SQUARE`.',
     hazard:
       '대부분 **feed-forward(HW 친화)**. 단 두 곳:\n' +
@@ -261,7 +261,7 @@ window.TOOL = {
         diagram: 'graph TD\n' +
           '  U["dqcoeff U<br/>int32[ncoeff]"] --> R["2×2 rotate<br/>4 mul/coeff"]\n' +
           '  V["dqcoeff V<br/>int32[ncoeff]"] --> R\n' +
-          '  ROM["cctx_mtx[7][2]<br/>[cosθ,sinθ]·256"] --> R\n' +
+          '  ROM["cctx_mtx[6][2]<br/>[cosθ,sinθ]·256"] --> R\n' +
           '  R --> UO["U&#39; → IST/2D"]\n' +
           '  R --> VO["V&#39; → IST/2D"]\n' +
           '  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
@@ -271,19 +271,34 @@ window.TOOL = {
         in: [
           { sig: 'c1 (U)', type: 'tran_low_t int32[ncoeff]', peer: 'dqcoeff U buffer', vol: '≤ TX area', note: 'in-place RMW' },
           { sig: 'c2 (V)', type: 'tran_low_t int32[ncoeff]', peer: 'dqcoeff V buffer', vol: '≤ TX area', note: 'cross-plane join — both must be ready' },
-          { sig: 'cctx_type', type: 'CctxType enum', peer: '← parse', vol: '1/block', note: 'selects 1 of 7 angles' },
-          { sig: 'cctx_mtx', type: 'int[7][2] ([cosθ,sinθ]·256)', peer: 'ROM', vol: '2 coeffs/type', note: 'rotation matrix' },
+          { sig: 'cctx_type', type: 'CctxType enum', peer: '← parse', vol: '1/block', note: 'selects 1 of 6 angles' },
+          { sig: 'cctx_mtx', type: 'int[6][2] ([cosθ,sinθ]·256)', peer: 'ROM', vol: '2 coeffs/type', note: 'rotation matrix' },
         ],
         out: [
           { sig: "c1'/c2'", type: 'int32 (rotated, clamped 8+bd)', peer: '→ IST / 2D inv-tx', vol: 'same buffers', note: '4 mults/coeff, ROUND>>CCTX_PREC_BITS' },
         ],
         note: 'Breaks plane independence: the U and V coeff buffers are read **together**. Schedule chroma as a pair, or insert a small rotate unit between dequant and the per-plane transform.',
       },
-      hw: { questions: [
-        'Needs BOTH U and V buffers present → cross-plane join. Schedule chroma together or insert a rotate unit?',
-        '4 mults/coeff — small MAC. Share with the transform datapath or dedicate?',
-        '7 angle types in cctx_mtx ROM — per-block type selection cost?',
-      ], derived: null } },
+      qna: [
+        { tag: 'delta', ref: 'idct.c:964',
+          q: 'CCTX는 무엇이고 AV1엔 있나? (AV2 신규)',
+          a: '**U/V 색차 계수쌍에 2×2 회전**을 거는 cross-chroma transform — 색차 잔차의 U↔V 상관을 제거(decorrelation). `av2_inv_cross_chroma_tx_block`. **AV1엔 전무**(aom grep `cross_chroma`/`cctx_mtx` = 0건, 실측).' },
+        { tag: 'verified', ref: 'idct.c:975',
+          q: '정확한 회전 연산은? (실측)',
+          a: '계수마다: `tmp0 = cos·U − sin·V`, `tmp1 = sin·U + cos·V` → `ROUND_POWER_OF_TWO_SIGNED_64(·, CCTX_PREC_BITS=8)` → `clamp(8+bd)`. = **Givens 회전** R(θ)=[cos,−sin; sin,cos]의 역(디코더는 인코더 forward 회전의 역). 계수당 **4곱 2가감 2라운드 2클램프**.' },
+        { tag: 'delta', ref: 'av2_txfm.c:65',
+          q: '각도 종류와 행렬 ROM은? (AV2 신규)',
+          a: '**6각도**: 45°(=Haar), 30°, 60°, −45°, −30°, −60°. `cctx_mtx[6][2]`에 `(cos,sin)·256`만 저장(45°={181,181}=256·0.707). per-block `cctx_type`(parse)로 1개 선택. ROM은 12개 int뿐.' },
+        { tag: 'delta', ref: 'idct.c:969',
+          q: 'CCTX는 전 계수에 거나, 좌상단만? 파이프 위치는? (AV2 신규)',
+          a: '`ncoeffs = av2_get_max_eob(tx_size)` — **블록 전 계수**에 적용(IST의 좌상단-only와 대비). 위치: **dequant → CCTX → IST → 1차 2D**. dequant 직후·plane별 역변환 직전.' },
+        { tag: 'hw', ref: 'idct.c:966',
+          q: 'CCTX가 만드는 HW 의존성은?',
+          a: '루프가 `src_c1`(U)·`src_c2`(V)를 **둘 다 읽고 둘 다 쓴다**(in-place lockstep) → **U·V dqcoeff가 모두 준비돼야** 진입. plane 독립성이 깨지는 **cross-plane join point**. 색차 2 plane을 묶어 스케줄하거나 dequant↔plane-tx 사이에 작은 rotate 유닛 삽입.' },
+        { tag: 'hw', ref: 'av2_txfm.c:65',
+          q: 'CCTX 회전유닛의 HW 비용은?',
+          a: '계수당 **4 int32×int32→int64 곱** + 2가감 = 고정 2×2 MAC. 작지만 색차 전 계수에 걸림. 6각도는 12-int ROM에서 cos/sin 2값만 읽으면 됨 → 회전유닛은 **계수쌍 단위 파이프**로 깔끔히 흐름(feed-forward, 단 U/V 동기).' },
+      ] },
     { id: 'i4', n: 4, title: 'Inverse transform entry', stage: 'skeleton',
       fn: { name: 'av2_inverse_transform_block', file: 'av2/common/idct.c', line: 998,
         role: 'init_txfm_param → IST pre-stage → primary 2D → clip-add to prediction.' },
