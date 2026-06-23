@@ -301,12 +301,25 @@ window.TOOL = {
       ] },
     { id: 'i4', n: 4, title: 'Inverse transform entry', stage: 'skeleton',
       fn: { name: 'av2_inverse_transform_block', file: 'av2/common/idct.c', line: 998,
-        role: 'init_txfm_param → IST pre-stage → primary 2D → clip-add to prediction.' },
+        role: 'eob skip → init_txfm_param → memcpy to temp → IST pre-stage → primary 2D add-to-prediction.' },
       spec: { num: '7.15', title: 'Inverse transform process' },
-      hw: { questions: [
-        'IST runs before the primary 2D — fixed 2-stage pipe (secondary → primary)?',
-        'init_txfm_param gathers tx_type/sec/use_ddt/eob — per-block setup latency?',
-      ], derived: null } },
+      qna: [
+        { tag: 'common', ref: 'idct.c:1003',
+          q: 'entry가 공통으로 하는 일은? (AV1 공통)',
+          a: '`if (!eob) return` — **빈 블록 스킵**(유효계수 0이면 변환 안 함). 끝은 `av2_highbd_inv_txfm_add_master` = **1차 2D 역변환 + 예측에 가산**(reconstruct). 이 "역변환→예측가산" 골격은 AV1과 동일.' },
+        { tag: 'delta', ref: 'idct.c:1016',
+          q: 'AV2가 entry에 끼워넣은 단계는? (AV2 델타)',
+          a: '`memcpy(temp_dqcoeff, dqcoeff, …)` → `av2_inv_stxfm(temp_dqcoeff, …)` = **IST 사전단**을 1차 변환 *앞*에 삽입. AV1은 dqcoeff→1차 2D로 직행했지만 AV2는 **계수를 작업버퍼로 복사 후 IST부터** 돌림.' },
+        { tag: 'verified', ref: 'idct.c:1019',
+          q: 'IST와 1차 변환의 실제 순서는? (실측)',
+          a: '`av2_inv_stxfm`(:1019) 호출이 `av2_highbd_inv_txfm_add_master`(:1037)보다 **먼저** → **secondary(IST) → primary(2D)** 고정 순서. IST는 `temp_dqcoeff` 위에서 in-place로 좌상단 저주파 계수만 갱신.' },
+        { tag: 'hw', ref: 'idct.c:1015',
+          q: 'entry의 HW 파이프 구조는?',
+          a: '**고정 2-스테이지 파이프: IST → 1차 2D.** 사이에 `temp_dqcoeff[MAX_TX_SQUARE]` = **블록 스크래치 SRAM**(IST 출력→1차 입력 버퍼). `init_txfm_param`은 per-block 제어 번들(tx_type/sec_tx_type/sec_tx_set/eob/use_ddt) 디코드 — 이전 블록과 파이프되면 지연 은닉.' },
+        { tag: 'hw', ref: 'decodeframe.c:470',
+          q: '이 entry 시점에 CCTX는 끝났나? plane 독립성은?',
+          a: '**CCTX는 상류**(`inverse_cctx_block_visit`, 블록-visit 레벨)에서 이미 끝남 → 이 per-plane entry에 올 땐 **plane이 다시 독립**. 즉 파이프 전체: dequant(ENT) → CCTX(색차 join) → [plane별] {IST → 1차 2D → 가산}. lossless DPCM(V/H_PRED)만 1D-only vert/horz 분기 추가.' },
+      ] },
     { id: 'i5', n: 5, title: '⭐ IST secondary transform', stage: 'skeleton',
       fn: { name: 'av2_inv_stxfm', file: 'av2/common/idct.c', line: 1073,
         role: 'Secondary transform on top-left low-freq coeffs (4×4/8×8) via learned int16 kernel; scatter back by IST scan.' },
@@ -314,7 +327,7 @@ window.TOOL = {
       io: {
         diagCaption: 'gather → dense matmul → scatter',
         diagram: 'graph TD\n' +
-          '  IN["top-left coeffs<br/>16 (4×4) / 64 (8×8)"] --> G["gather<br/>(IST scan)"]\n' +
+          '  IN["top-left coeffs<br/>16 (4×4) / 48 (8×8, reduced)"] --> G["gather<br/>(primary scan)"]\n' +
           '  G --> MM["dense matmul<br/>K · x"]\n' +
           '  ROM["ist kernel LUT<br/>[type][class] int32"] --> MM\n' +
           '  MM --> S["scatter back<br/>(IST scan)"]\n' +
@@ -324,36 +337,83 @@ window.TOOL = {
           '  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
           '  class IN mem;\n  class OUT mem;\n  class ROM rom;\n  class G op;\n  class MM op;\n  class S op;',
         in: [
-          { sig: 'coeffs (low-freq)', type: 'tran_low_t int32', peer: 'dqcoeff (after CCTX)', vol: '16 (4×4) / 64 (8×8)', note: 'gathered by IST scan' },
-          { sig: 'stx_type/size_class', type: 'int', peer: '← TX_TYPE upper bits', vol: '1/block', note: 'selects kernel bank' },
-          { sig: 'ist_kernel', type: 'int32 LUT (from int16 ist_4x4_kernel[14][3][16][16])', peer: 'ROM', vol: '16×16 / 64×64 per (type,class)', note: 'dense matrix' },
+          { sig: 'coeffs (low-freq)', type: 'tran_low_t int32', peer: 'temp_dqcoeff (after CCTX)', vol: '16 (4×4) / 48 (8×8 reduced)', note: 'gathered by primary scan order' },
+          { sig: 'set / stx_type / size_class', type: 'int', peer: '← sec_tx_set + TX_TYPE', vol: '1/block', note: 'set=mode_t, stx_idx=stx_type−1 (3 nonzero), class∈{0..3}' },
+          { sig: 'ist_kernel', type: 'int16 ist_4x4_kernel[SET][3][16][16] / ist_8x8', peer: 'ROM', vol: '[8×16] used (4×4); reduced for 8×8', note: 'dense int16 matrix, round>>7' },
         ],
         out: [
-          { sig: "coeffs'", type: 'int32 (scattered)', peer: '→ primary 2D inv-tx', vol: 'same positions', note: 'gather→matmul→scatter, runs before primary' },
+          { sig: "coeffs'", type: 'int32 (scattered, clamp 8+bd)', peer: '→ primary 2D inv-tx', vol: 'same positions', note: 'gather→matmul→scatter (transpose for H-modes), runs before primary' },
         ],
-        note: 'Dense small matrix-multiply — candidate to **share a MAC array with DIP/MHCCP/DDT** (the decoder-NPU thesis).',
+        note: 'Dense small matrix-multiply. Legitimate reuse is **within the IQT module** — IST and DDT (i8) are both dense matmuls and run sequentially inside one block transform, so one matmul engine can serve both. (NOT cross-stage sharing — each pipe stage stays a dedicated module.)',
       },
-      hw: { questions: [
-        'Small dense matrix-multiply on top-left 16/64 coeffs — a MAC array. Share with DIP/MHCCP/DDT MAC?',
-        'Kernel ist_4x4_kernel[14][3][16][16] int16 → int32 LUT at init. ROM size and addressing?',
-        'Gather/scatter via IST scan orders — permutation network cost?',
-      ], derived: null } },
+      qna: [
+        { tag: 'delta', ref: 'idct.c:1073',
+          q: 'IST는 무엇이고 AV1엔 있나? (AV2 신규)',
+          a: '**Secondary(2차) 변환** — 1차 변환 앞단에서 **좌상단 저주파 계수**에 작은 학습행렬을 곱해 잔여 상관 제거. `av2_inv_stxfm`. **AV1엔 전무**(aom idct.c grep `inv_stxfm`/`ist_*_kernel`=0건, 실측). gather→dense matmul→scatter 구조.' },
+        { tag: 'verified', ref: 'idct.c:1088',
+          q: 'IST 크기와 gather 방식은? (실측)',
+          a: '두 크기: `sb_size = (w≥8 && h≥8) ? 8 : 4`. **4×4**는 `IST_4x4_WIDTH=16`개, **8×8**은 `IST_8x8_WIDTH=48`개(reduced) 계수를 **1차 변환 scan 순서로** 모음(`buf0[r]=src[scan[r]]`) — IST 스캔을 primary와 정렬. w·h는 32로 clamp.' },
+        { tag: 'verified', ref: 'idct.c:1043',
+          q: 'IST 행렬곱의 실제 연산은? (실측)',
+          a: '`inv_stxfm_c`: `out[j] = Σ_i src[i]·kernel[i·W+j]` → `ROUND_POWER_OF_TWO_SIGNED(resi, 7)` → `clamp(8+bd)`. **dense 행렬-벡터곱**(버터플라이 아님). 4×4 커널 `[IST_4x4_HEIGHT=8][16]` — 역변환은 압축된 8계수를 16으로 **확장**.' },
+        { tag: 'delta', ref: 'secondary_tx.h:313',
+          q: 'IST 커널 선택과 ROM은? (AV2 신규)',
+          a: '`ist_4x4_kernel[IST_4x4_SET_SIZE][STX_TYPES−1=3][16][16]` int16 + `ist_8x8_kernel`. 주소 = `set(=sec_tx_set)` × `stx_idx(=stx_type−1, 3종)` × `size_class∈{0..3}`(크기+DCT_DCT). **모드 의존 행렬뱅크**.' },
+        { tag: 'delta', ref: 'idct.c:1108',
+          q: 'intra 모드가 IST에 어떻게 개입하나? (AV2 신규)',
+          a: 'H 계열 모드(`H_PRED`/`D157`/`D67`/`SMOOTH_H`)면 `transpose=1` → **전치된 IST scan**(`stx_scan_orders_transpose_*`)으로 산포. inter면 `intra_mode=DC_PRED`로 고정. 즉 IST 커널/스캔이 **예측 모드와 결합**.' },
+        { tag: 'hw', ref: 'idct.c:1043',
+          q: 'IST의 HW 형태와 모듈 내 reuse는?',
+          a: '**작은 dense MAC 어레이**(gather/scatter 퍼뮤테이션 + K·x). 블록당 1회, 1차 변환 앞에서 temp 버퍼 위 실행. **정당한 reuse는 IQT 모듈 내부** — IST와 DDT(i8)가 둘 다 dense matmul이고 한 블록 변환 중 순차 발생 → matmul 엔진 1개로 둘 서비스 가능. (스테이지 간 공유 아님 — 각 파이프 단은 전용 모듈 유지.)' },
+        { tag: 'hw', ref: 'idct.c:1115',
+          q: 'gather/scatter 스캔의 HW 비용은?',
+          a: '`stx_scan_orders_4x4/8x8` + 전치판 4종 = **퍼뮤테이션 네트워크** 주소생성. ROM 뱅크는 `[set][type][size_class]`로 어드레싱. 좌상단만 건드리므로 나머지 계수는 bypass(1차 변환이 그대로 받음).' },
+      ] },
     { id: 'i6', n: 6, title: '2D inverse transform core', stage: 'skeleton',
       fn: { name: 'inv_txfm_c', file: 'av2/common/idct.c', line: 643,
-        role: 'Separable 2D: sqrt2 rescale → 1D row → 1D col → clip-add. >32 uses zero-out + 2× duplication.' },
+        role: 'Separable 2D: split into row/col 1D, sqrt2 rescale → row pass → col pass → clip-add. >32 = compute 32 + 2× duplicate.' },
       spec: { num: '7.15.4', title: '2D inverse transform process' },
-      hw: { questions: [
-        'Separable row/col = classic pipelined butterfly. Row buffer between passes = f(TX width)?',
-        '64-wide: only top-left 32 non-zero → skip + duplicate. Compute savings vs control complexity?',
-      ], derived: null } },
-    { id: 'i7', n: 7, title: '1D kernels (DCT2 / ADST / IDTX)', stage: 'skeleton',
+      qna: [
+        { tag: 'common', ref: 'idct.c:669',
+          q: '분리형 2D의 기본 흐름은? (AV1 공통)',
+          a: '2D tx_type를 행/열 1D로 분해(`g_hor_tx_type`/`g_ver_tx_type`) → `inv_transform_1d_c`로 **행 pass**(height 줄) → tmp 버퍼 경유 → **열 pass**(width 줄) → 마지막 `highbd_clip_pixel_add`로 예측 가산. 패스 사이 `inv_tx_shift[tx_size][0/1]` 스케일. 골격은 AV1과 동일.' },
+        { tag: 'common', ref: 'idct.c:701',
+          q: 'sqrt2 직사각 보정이란? (AV1 공통)',
+          a: '`sqrt2 = (log2width+log2height) & 1` — 가로·세로 log합이 홀수(=비정사각 변환)면 입력 전체에 `NewInvSqrt2` 곱(round_shift). 직사각 변환의 √2 이득 보정. AV1에도 있던 메커니즘.' },
+        { tag: 'common', ref: 'idct.c:732',
+          q: '64폭/64높이는 어떻게 처리하나? (AV1 공통)',
+          a: '`skipWidth/skipHeight = dim>32 ? dim−32 : 0` — **좌상단 32만 비영**(고주파 zero-out). 32로 변환 후 행/열을 **각 2배 복제**(`block[y·2w+2x]=block[…+1]=tmp`)로 64 확장. 64×64는 실연산 ¼. AV1-common.' },
+        { tag: 'delta', ref: 'idct.c:643',
+          q: 'AV1 대비 디스패치 구조 변화는? (AV2 델타)',
+          a: 'AV1 **per-size 함수군**(`av1_inv_txfm2d_add_WxH` + 함수포인터)을 AV2는 **단일 `inv_txfm_c` 통합 스위치**로 재구성. lossless는 `av2_highbd_iwht4x4_add`로 분기(이건 av2_inv_txfm2d.c).' },
+        { tag: 'delta', ref: 'idct.c:672',
+          q: 'DDT 치환이 2D 코어 어디서 일어나나? (AV2 델타)',
+          a: '1D 패스 *전*에 게이트: `use_ddt`이고 행/열 타입이 `DST7`/`DCT8`이며 size∈{4,8,16}(`REPLACE_ADST*`)이면 **DST7→DDTX, DCT8→FDDT**로 교체(`tx_type_row/col` 재지정). 즉 ADST 자리를 학습커널로 바꿔치기. (실연산은 i8.)' },
+        { tag: 'hw', ref: 'idct.c:719',
+          q: '2D 코어의 HW 구조는?',
+          a: '고전적 **행 1D → 전치 → 열 1D 파이프**. `block`/`tmp` 더블버퍼(각 `MAX_TX_SQUARE`)가 **전치/중간 SRAM**. 중간 정밀도 `bd+8`비트(`clamp_buf`), 최종 `bd`로 clip-add(reconstruct 지점). 64는 ¼ 연산 + 2배복제 제어. 가장 병렬친화 — feed-forward, hazard 없음.' },
+      ] },
+    { id: 'i7', n: 7, title: '1D kernels (DCT2 / ADST / IDTX + DDTX/FDDT)', stage: 'skeleton',
       fn: { name: 'inv_transform_1d_c', file: 'av2/common/idct.c', line: 534,
-        role: 'Dispatch by size × type to 1D butterfly kernels (DCT2, IDTX, ADST/DST7, FDST).' },
+        role: 'Two-level switch size_index(4/8/16/32) × tx_type_index(DCT2/IDTX/ADST/FDST/DDTX/FDDT) → per-(size,type) kernel.' },
       spec: { num: '7.15.2', title: '1D transforms' },
-      hw: { questions: [
-        'Shared butterfly network across types vs per-type units? Reconfigurable datapath?',
-        'Coefficient ROM per size — total 1D coefficient storage?',
-      ], derived: null } },
+      qna: [
+        { tag: 'common', ref: 'idct.c:534',
+          q: '1D 디스패치 구조는? (AV1 공통)',
+          a: '2단 스위치: `size_index`(0..3 = **4/8/16/32**) × `tx_type_index`. type 0~3 = **DCT2 / IDTX / ADST(DST7) / FDST** = 버터플라이 커널 — AV1에서 물려받은 1D 셋. 각 `inv_txfm_<type>_size<N>_c` 호출.' },
+        { tag: 'delta', ref: 'idct.c:557',
+          q: '어떤 1D 타입이 AV2에서 추가됐나? (AV2 델타)',
+          a: 'type **4 = DDTX**, **5 = FDDT** — 데이터구동(학습) 커널 추가(size 4/8/16에만). AV1은 DCT/ADST/FlipADST/IDTX 4종이었고, AV2는 여기에 2종을 더해 ADST 자리를 대체 가능하게 함.' },
+        { tag: 'common', ref: 'idct.c:629',
+          q: 'size 32는 왜 타입이 적나? (AV1 공통)',
+          a: 'size_index 3(=32)는 **DCT2·IDTX만** 지원(case 0/1, 나머지 assert). 큰 변환은 DCT/IDTX로 제한 — AV1과 동일한 제약(ADST·DDT는 ≤16에서만).' },
+        { tag: 'hw', ref: 'idct.c:557',
+          q: '1D datapath가 균일하지 않은 이유는?',
+          a: '⭐ DCT2/IDTX/ADST/FDST는 **fast butterfly** O(N log N)이지만, **DDTX/FDDT(case 4/5)는 `inv_txfm_ddtx_*`(idct.c:405) = dense matmul** O(N²)로 라우팅. 즉 1D 디스패치가 **4타입→버터플라이, 2타입→matmul 유닛**으로 갈라짐 → 단일 균일 datapath로 못 묶음.' },
+        { tag: 'hw', ref: 'idct.c:534',
+          q: '버터플라이 유닛 구성·ROM은?',
+          a: 'reconfigurable 버터플라이 1개 vs per-(size,type) 전용 유닛 trade-off. 버터플라이 변형 = 4타입 × {4,8,16} + 2타입 × {32} ≈ 14종 + size별 계수 ROM. DDTX/FDDT는 별도 matmul+학습행렬 ROM(i8)으로 빠짐.' },
+      ] },
     { id: 'i8', n: 8, title: 'DDT data-driven kernels', stage: 'skeleton',
       fn: { name: 'inv_txfm_ddtx / fddt', file: 'av2/common/idct.c', line: 405,
         role: 'Learned matrix kernels (DDTX/FDDT) replacing ADST for inter blocks (replace_adst_by_ddt).' },
@@ -368,17 +428,70 @@ window.TOOL = {
         ],
         note: 'Like IST, a **dense matmul** — the cost/benefit vs the fast butterfly path is the HW question. Inter-only ⇒ utilization depends on frame type.',
       },
-      hw: { questions: [
-        'DDT = dense matrix multiply (not a fast butterfly). Dedicated unit vs general matmul shared with IST?',
-        'ROM tx_kernel_ddtx_size4/8/16 — sizing; inter-only. Utilization?',
-      ], derived: null } },
+      qna: [
+        { tag: 'delta', ref: 'idct.c:405',
+          q: 'DDT는 무엇이고 AV1엔 있나? (AV2 신규)',
+          a: '**Data-Driven Transform** — 학습/사전계산된 행렬 커널(DDTX/FDDT)이 inter 블록에서 **ADST(DST7/DCT8)를 대체**. 버터플라이가 아니라 **dense N×N 행렬곱**. **AV1엔 전무**(aom idct.c grep `ddtx`/`DDTX`=0건, 실측).' },
+        { tag: 'verified', ref: 'idct.c:412',
+          q: 'DDT 1D 커널의 실제 연산은? (실측)',
+          a: '`dst[j·line+i] = clamp((Σ_k src[i·N+k]·tx_mat[k·N+j] + offset) >> shift)`, `tx_mat = tx_kernel_ddtx_sizeN[INV_TXFM][0]`. **line당 N²곱**(O(N²), 버터플라이 O(N log N) 대비). 출력 인덱스 `j·line+i` = **전치 write**(2D 파이프의 전치를 커널이 흡수).' },
+        { tag: 'delta', ref: 'av2_txfm.h:43',
+          q: 'DDT는 언제 ADST를 대체하나? (AV2 신규)',
+          a: '게이트 `replace_adst_by_ddt`(blockd.h:2364, **inter + enable_inter_ddt**) + 매크로 `REPLACE_ADST4=0 / ADST8=1 / ADST16=1` → 실제 활성은 **inter·size 8·16**(size4는 정의돼도 OFF). 매핑: `DST7→DDTX`, `DCT8→FDDT`. intra·intrabc는 제외.' },
+        { tag: 'delta', ref: 'txb_common.h:43',
+          q: 'DDT 커널 ROM 구성은? (AV2 신규)',
+          a: '`tx_kernel_ddtx_size4/8/16[TXFM_DIRECTIONS][N][N]` int32. 역변환은 `[INV_TXFM]` 방향. 크기 = 4²+8²+16² = **336 int/방향** — ROM 자체는 작지만 N² MAC throughput이 필요.' },
+        { tag: 'hw', ref: 'idct.c:412',
+          q: 'DDT의 HW 비용과 모듈 내 reuse는?',
+          a: 'dense **O(N²)** vs 버터플라이 O(N log N): N=16이면 **256 vs ~64 MAC = 4×**. 전용 matmul 유닛, 혹은 **IQT 모듈 내 IST와 matmul 엔진 공유**(둘 다 dense matmul, 한 블록 변환 중 순차 → 정당한 모듈 내 reuse). 스테이지 간 공유는 아님.' },
+        { tag: 'hw', ref: 'av2_txfm.h:43',
+          q: 'DDT 유닛의 활용률(utilization)은?',
+          a: 'inter-only + size 8/16 게이트 → **프레임 타입·tx_size에 따라 가동률 변동**. intra/키프레임에선 idle. 전용 유닛이면 면적 낭비 위험 → IST와 공유하거나 작게 두고 throughput만 맞추는 사이징 판단 필요.' },
+      ] },
     { id: 'i9', n: 9, title: 'HW synthesis (IQT stage)', stage: 'skeleton',
       fn: { name: '(whole stage)',
-        role: 'Put it together: the most parallel decoder stage, plus IST/CCTX/DDT matrix ops and the TCQ-dequant serial wrinkle.' },
-      hw: { questions: [
-        'Which AV2 additions (IST, CCTX, DDT) share one MAC array vs dedicated? Area vs flexibility.',
-        'Feed-forward except TCQ-dequant (serial) and CCTX (U/V join). Pipeline depth?',
-        'Total kernel ROM (1D coeffs + IST + DDT + CCTX + QM) budget.',
-      ], derived: null } },
+        role: 'Tie it together: most parallel decoder stage; dense-matmul subset (IST/DDT) reused within the module; serial wrinkles = TCQ-dequant + CCTX join.' },
+      figures: [
+        { title: 'IQT stage — full dataflow (dequant → CCTX → IST → primary 2D)',
+          mermaid:
+'graph TD\n' +
+'  DQ["dequant<br/>(inside ENT loop)<br/>int32 × dqv, QM, TCQ 2-pass"] --> CCX["CCTX<br/>U/V 2×2 rotate<br/>cross-plane join"]\n' +
+'  CCX --> TMP["temp_dqcoeff<br/>MAX_TX_SQUARE scratch"]\n' +
+'  TMP --> IST["IST secondary<br/>dense matmul (top-left)"]\n' +
+'  IST --> ROW["1D row pass<br/>butterfly / DDT"]\n' +
+'  ROW --> TR["tmp transpose buf"]\n' +
+'  TR --> COL["1D col pass<br/>butterfly / DDT"]\n' +
+'  COL --> ADD["clip-add → prediction"]\n' +
+'  KROM["kernel ROM<br/>1D coeff + IST + DDT + cctx_mtx + QM"] --> IST\n' +
+'  KROM --> ROW\n' +
+'  KROM --> COL\n' +
+'  classDef mem fill:#13283c,stroke:#4ea1ff,color:#e6edf3;\n' +
+'  classDef rom fill:#2a2410,stroke:#ffcf6b,color:#e6edf3;\n' +
+'  classDef op fill:#13251b,stroke:#5bd17a,color:#e6edf3;\n' +
+'  classDef hot fill:#2a1414,stroke:#ff6b6b,color:#e6edf3;\n' +
+'  class TMP mem;\n  class TR mem;\n  class KROM rom;\n' +
+'  class CCX hot;\n  class DQ hot;\n  class IST op;\n  class ROW op;\n  class COL op;\n  class ADD op;',
+          caption: 'Feed-forward except two wrinkles (red): TCQ-dequant 2-pass (carried state, shared with ENT) and CCTX (U/V must both be ready). IST and the primary 1D passes draw from one kernel ROM.' },
+      ],
+      qna: [
+        { tag: 'hw',
+          q: 'IQT 스테이지 전체 파이프를 한 줄로?',
+          a: '`dequant`(ENT 루프 내, int32×dqv·QM·TCQ) → `CCTX`(색차 U/V 2×2 회전, join) → `temp_dqcoeff` → `IST`(2차 dense matmul, 좌상단) → `1차 2D`(행 butterfly/DDT → 전치 → 열) → `clip-add 예측가산`. **디코더에서 가장 병렬친화** 스테이지.' },
+        { tag: 'hw',
+          q: 'IQT의 직렬 병목 2곳은?',
+          a: '나머지는 전부 feed-forward, 단 **(1) TCQ dequant 2-pass**(i1 — 역스캔 carried state, ENT와 공유)와 **(2) CCTX U/V cross-plane join**(i3 — 두 plane 모두 준비 필요). 이 둘만 순차성/동기 제약을 만들고, 1차 변환·IST는 hazard 없는 파이프.' },
+        { tag: 'hw',
+          q: 'dense-matmul은 어디고, 모듈 내 reuse 범위는?',
+          a: '**IST(i5)와 DDT(i8)만 O(N²) dense matmul**, 나머지(DCT2/IDTX/ADST/FDST)는 fast butterfly. IST·DDT는 **한 블록 변환 중 순차** 발생 → **IQT 모듈 내부 matmul 엔진 1개로 둘 서비스** 가능(정당한 stage 내 reuse). ⚠️ 스테이지 간(다른 모드와) MAC 공유는 streaming 동시가동이라 불가 — 각 파이프 단은 전용 모듈.' },
+        { tag: 'hw',
+          q: 'IQT 커널 ROM 예산은?',
+          a: '① 1D 버터플라이 계수(size별) ② IST `ist_4x4[set][3][16][16]`+`ist_8x8` int16 ③ DDT `tx_kernel_ddtx_size4/8/16` 336 int/방향 ④ CCTX `cctx_mtx[6][2]` 12 int ⑤ QM. IST가 ROM 비중 최대(set×type×class×N²).' },
+        { tag: 'delta',
+          q: 'AV1 대비 IQT 변경 요약은? (델타 총정리)',
+          a: '**추가:** IST(2차 pre-stage)·CCTX(색차 회전)·DDT(ADST 대체, inter 8/16)·TCQ dequant 2-pass. **확대:** dequant/계수 int16→**int32**, +QUANT_TABLE_BITS 라운딩. **재구성:** per-size 함수군→통합 `inv_txfm_c` 스위치. **재사용:** 버터플라이 코어 + 16 primary TX_TYPE은 AV1 그대로.' },
+        { tag: 'hw',
+          q: 'datapath 폭과 버퍼는?',
+          a: 'dequant·계수 **int32**(AV1 int16) 전구간 → 곱셈기·버퍼 폭 확대. 블록 스크래치 `temp_dqcoeff[MAX_TX_SQUARE]`(IST용) + 2D 전치용 `tmp`/`block` 더블버퍼. 중간 정밀도 `bd+8`비트, 최종 `bd`로 포화.' },
+      ] },
   ],
 };
