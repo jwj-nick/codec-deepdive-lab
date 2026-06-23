@@ -431,8 +431,8 @@ window.TOOL = {
           q: 'AV1 대비 intra 추가 총정리는? (델타)',
           a: '**추가:** DIP(행렬 인트라)·IDIF(luma 방향 보간)·IBP(양방향 인트라)·MRL(≤4 라인)·CfL implicit(α LS 유도)·MHCCP(3-param 비선형 솔버). **재사용:** DC/SMOOTH/PAETH/기본 방향예측·explicit CfL은 AV1 그대로.' },
         { tag: 'hw',
-          q: '【recon 공유부 — inter 후 통합 예정】',
-          a: '**forward-pointer:** predict → IQT(dequant→CCTX→IST→2D) → clip-add → 다음 블록 진행 = **intra·inter 공통 골격**(`decode_reconstruct_tx`, decodeframe.c:450). 예측 소스만 다름(이웃 vs 참조). **inter 정독 후 별도 "recon" 항목으로 한 번만** 정리해 양쪽이 참조 → 중복 제거. intra 고유분 = 위 recon-feedback **이웃 의존**(여기 유지).' },
+          q: '【recon 공유부 → 별도 recon 페이지 참조】',
+          a: '**forward-pointer:** predict → IQT(dequant→CCTX→IST→2D) → clip-add → 다음 블록 = **intra·inter 공통 골격**(`decode_reconstruct_tx`, decodeframe.c:450). 예측 소스만 다름(이웃 vs 참조). ▶ 공유 재구성 루프는 **`app.html?tool=recon`**(RECON 페이지)에 한 곳으로 정리됨. intra 고유분 = 위 recon-feedback **이웃 의존**(여기 유지).' },
       ] },
   ],
 };

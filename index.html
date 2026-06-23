@@ -38,6 +38,13 @@
         <b>모드별 전용 module이 기본</b>(streaming 파이프=동시가동→시분할 불가). 각 모듈의 MAC datapath 설계가 NPU 기법 전이점.</div>
       <div class="lc-status">inventory 보기 →</div>
     </a>
+    <a class="launch-card" href="app.html?tool=recon" style="flex:1 1 100%;border-color:#2e4a5a;margin-top:8px">
+      <div class="lc-hw">RECON · intra/inter 공유</div>
+      <div class="lc-label">🔁 Reconstruct loop — predict(이웃/참조) → IQT 잔차 → clip-add</div>
+      <div class="lc-role">intra·inter가 <b>공유하는 블록 복원 골격</b>(<code>decode_reconstruct_tx</code>). 예측 소스만 다르고
+        재구성 체인(dequant→CCTX→IST→2D→add)은 동일 — 2 predict front-end → 1 공유 back-end. intra의 recon-feedback 직렬성이 핵심.</div>
+      <div class="lc-status">공유 루프 보기 →</div>
+    </a>
   </section>
 
   <section class="card note">

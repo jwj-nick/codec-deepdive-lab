@@ -429,8 +429,8 @@ window.TOOL = {
           q: 'AV1 대비 inter 추가 총정리는? (델타)',
           a: '**추가:** TIP(가상참조 프레임)·DMVR(디코더 MV정제)·optical-flow(BDOF)·7-level MV정밀도·12-tap sharp·ref-MV bank. **재사용:** translation/warp MC·compound·8-tap subpel·spatial/temporal MV 후보는 AV1 그대로.' },
         { tag: 'hw',
-          q: '【recon 공유부 — intra n8과 통합 시점】',
-          a: '**forward-pointer:** predict(inter, 여기) → IQT(dequant→CCTX→IST→2D) → clip-add → 다음 블록 = **intra와 공통 골격**(`decode_reconstruct_tx`, decodeframe.c:450). **이제 intra·inter 모두 끝 → "recon" 항목 신설 시점.** 양쪽 synthesis의 이 카드를 통합. inter 고유 = MC 대역폭 + 정제 체인 + 참조프레임(이웃 의존 없음 → intra보다 블록 병렬 자유, 대신 메모리 지배).' },
+          q: '【recon 공유부 → 별도 recon 페이지 참조】',
+          a: '**forward-pointer:** predict(inter, 여기) → IQT(dequant→CCTX→IST→2D) → clip-add → 다음 블록 = **intra와 공통 골격**(`decode_reconstruct_tx`, decodeframe.c:450). ▶ 공유 재구성 루프는 **`app.html?tool=recon`**(RECON 페이지)에 정리됨. inter 고유 = MC 대역폭 + 정제 체인 + 참조프레임(이웃 의존 없음 → intra보다 블록 병렬 자유, 대신 메모리 지배).' },
       ] },
   ],
 };
